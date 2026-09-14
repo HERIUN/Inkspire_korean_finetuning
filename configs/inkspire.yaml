@@ -1,0 +1,68 @@
+# InkSpire 이미지 모델 (FLUX.1-Fill-dev + LoRA, models/inkspire.py) — train/inkspire.py
+#
+# 키 이름 = CLI 인자명. 우선순위: CLI > 이 yaml > 코드 기본값. `_base_` 상속 없음(inkspire_layout.yaml 참고).
+# 선행: ./train.sh fetch-flux (hf auth login + 라이선스 수락 → 34GB + model_zoo/flux_fill_empty_prompt.pt)
+
+run:
+  out: finetune_runs/inkspire_p512
+  seed: 42
+  device: cuda
+  resume: null                       # lora_step_XXXXXX 디렉토리 (pytorch_lora_weights.safetensors + trainer.pt)
+  num_workers: 16                    # 페이지 렌더가 병목
+  save_every: 1000
+  log_every: 20
+
+model:
+  flux_repo: black-forest-labs/FLUX.1-Fill-dev
+  empty_cache: model_zoo/flux_fill_empty_prompt.pt  # 빈 프롬프트 임베딩 캐시 (텍스트 인코더 미탑재)
+  lora_rank: 32                      # 논문 r=32, α=32 → 115.9M
+  lora_alpha: 32
+  rape: true                         # 90° 회전 후 [X|Xc] 연결 (표 4·5)
+  ape: true                          # Xc 토큰 RoPE id = 대응 X 토큰 id
+  guidance: 30.0                     # 학습=추론 고정 (논문 미기재 추정치, Fill-dev 동작점)
+  grad_ckpt: true                    # 항상 on (P=512 B=4 ≈ 40GB)
+
+optim:                               # 논문: Prodigy lr=1, wd 0.01, batch 4, 20k iters
+  optimizer: prodigy                 # prodigy | adamw
+  lr: 1.0                            # adamw 면 1e-4 권장
+  weight_decay: 0.01
+  batch_size: 4
+  grad_accum: 1
+  max_steps: 20000
+  clip_grad: 1.0                     # dreambooth 관례(논문 미기재). 0 = 해제
+
+paths:
+  corpus_korean: assets/corpus/korean_lines.txt
+  corpus_english: assets/corpus/english_words.txt
+  korean_fonts_dir: assets/fonts_korean_v3/train
+  backgrounds_dir: assets/backgrounds
+
+data:
+  P: 512                             # 패치 크기 (논문 1024). 1024 는 B=2 ≈ 50GB
+  page_w: 1024
+  std_font: assets/fonts_label/NanumGothic-Regular.ttf   # Xc(콘텐츠 이미지) 표준폰트. 스타일 풀에서는 exclude_fonts 로 제외
+  mask_mode: rand                    # rand = R-Mask (논문) | top = 행 ≥ P/8 마스크(F-TopMask)
+  exclude_fonts: [UlsanJunggu, NanumGothic]
+  aug: true                          # 줄 회전·elastic·morph·blur·배경·jitter
+  sampler:
+    weights:
+      ko: 0.45
+      en: 0.20
+      num: 0.20
+      rand: 0.15
+    punct_prob: 0.20
+    wrap_prob: 0.05
+    special_prob: 0.08
+    rand_len: [1, 4]
+    max_chars:
+      style: 40
+      gen: 130
+    n_english: 8000
+    charset_rule: intersection
+
+val:                                 # mode="line" 고정 배치: 첫 줄 아래 전부 마스크, GT xc = oracle 레이아웃
+  val_every: 500
+  val_batches: 2
+  val_seed: 1234
+  val_steps: 20                      # generate ODE step
+  val_fonts_dir: assets/fonts_korean_v2/test

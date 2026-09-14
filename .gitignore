@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.venv/
+assets/
+model_zoo/
+finetune_runs/
+_debug/
+data/
+*.pth
+*.safetensors
+*.pdf

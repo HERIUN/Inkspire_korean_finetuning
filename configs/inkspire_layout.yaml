@@ -1,0 +1,60 @@
+# InkSpire 레이아웃 모델 (masked CFM, models/inkspire_layout.py) — train/inkspire_layout.py
+#
+# 키 이름 = CLI 인자명(-- 없이, - 는 _ 로). 우선순위: CLI > 이 yaml > 코드 기본값.
+# `_base_` 상속은 안 쓴다 — 로더가 파서에 없는 키를 거부하므로 base.yaml 의 Eruku 키를 못 받는다.
+# paths 4키만 base.yaml 과 같은 이름으로 복제(korean_fonts_dir 가 페이지 렌더 폰트 풀 겸 charset 소스).
+
+run:
+  out: finetune_runs/inkspire_layout
+  seed: 42
+  device: cuda
+  resume: null                       # checkpoint_*.pth (model+optimizer+step). 정규화 통계는 ckpt 안에 있음
+  num_workers: 8                     # 페이지 렌더가 병목 → 16 권장
+  save_every: 2000
+  log_every: 50
+
+model:                               # 논문: 10층 / hidden 512 / 8 heads (≈33M)
+  d_model: 512
+  n_layers: 10
+  n_heads: 8
+  max_len: 2048                      # P=512 페이지 보통 200~450 토큰, 작은 pitch 면 1,000+ (KoreanLayoutDataset.MAX_TOKENS 와 동일)
+  norm_batches: 20                   # step 0 에 이만큼의 배치로 layout mean/std 를 잡는다(★ 필수, resume 땐 skip)
+
+optim:                               # 논문: batch 160, AdamW 1e-4
+  batch_size: 160
+  lr: 1.0e-4
+  weight_decay: 0.01
+  max_steps: 20000
+  clip_grad: 1.0                     # 0 = 해제
+
+paths:
+  corpus_korean: assets/corpus/korean_lines.txt
+  corpus_english: assets/corpus/english_words.txt
+  korean_fonts_dir: assets/fonts_korean_v3/train    # 12,951종 (best run 과 동일)
+  backgrounds_dir: assets/backgrounds
+
+data:
+  P: 512                             # 페이지 줄 수 = ceil(P/pitch)+U(0,3) — 이미지 모델과 같은 페이지 분포
+  page_w: 1024
+  exclude_fonts: [UlsanJunggu, NanumGothic]   # NanumGothic = 표준폰트(Xc) family
+  sampler:                           # base.yaml 과 동일 (어절 공급 규칙)
+    weights:
+      ko: 0.45
+      en: 0.20
+      num: 0.20
+      rand: 0.15
+    punct_prob: 0.20
+    wrap_prob: 0.05
+    special_prob: 0.08
+    rand_len: [1, 4]
+    max_chars:
+      style: 40
+      gen: 130
+    n_english: 8000
+    charset_rule: intersection
+
+val:
+  val_every: 1000                    # val loss + sample(steps=10) 의 생성 토큰 bbox L1(px)
+  val_batches: 4
+  val_seed: 1234
+  val_fonts_dir: assets/fonts_korean_v2/test        # held-out 16종
