@@ -18,14 +18,26 @@ Content, and Noise* (Wang et al., ICLR 2026, OpenReview `FBPuLChGNX`) 의 한글
 | `models/inkspire.py` | ② 이미지 — FLUX.1-Fill-dev + LoRA r=32 (115.9M, 논문 표 8), R-APE, 텍스트 인코더 제거 |
 | `train/inkspire_layout.py`, `train/inkspire.py` | 각 트레이너 |
 | `infer/inkspire.py` | one-shot 생성기 + 뷰어 (`InkSpireGen.gen`) |
+| `eval/htr_cer.py` | 한글 HTR 리더 CER ← 주 지표. `--ckpt inkspire:<lora_dir>[,<layout_ckpt>]` |
+| `experiments/gen_compare.py` | 두 체크포인트 생성 비교 몽타주 |
 | `tools/fetch_flux.py` | FLUX 가중치 1회 다운로드 + 빈 프롬프트 임베딩 캐시 |
 | `configs/*.yaml` | 조절 가능한 전부 |
 
-지원 모듈(`configs/loader.py`, `custom_datasets/korean/{fontset,split,alphabet}.py`,
-`train/core.py`, `infer/show.py`)은 원본 repo 에서 가져왔고, `split.py`·`train/core.py`·
-`infer/show.py` 는 **여기서 쓰는 심볼만 남기고 잘라냈다** — 그래야 Eruku 모델과
-`custom_datasets/upstream/font_square/*` 의존이 사라진다. 각 파일 docstring 에 무엇을 왜
-버렸는지 적어 뒀다.
+지원 모듈은 원본 repo 에서 가져왔다. `configs/loader.py` · `korean/{fontset,alphabet}.py` ·
+`upstream/{constants,alphabet,subsequent_mask}.py` · `models/{htr,vae,nn_utils,unet_2d_blocks,
+downsampling,upsampling}.py` 는 그대로 복사했고, 아래 여섯은 **여기서 쓰는 심볼만 남기고
+잘라냈다** — 그래야 Eruku 모델(`models/eruku.py`)과 `upstream/font_square/*` 의존이 사라진다.
+각 파일 docstring 에 무엇을 왜 버렸는지 적어 뒀다.
+
+| 파일 | 줄 수 | 끊어낸 의존 |
+|---|---|---|
+| `custom_datasets/korean/split.py` | 471 → 175 | `upstream/font_square/*` |
+| `train/core.py` | 733 → 97 | `models/eruku.py`, `korean/handb.py` |
+| `infer/show.py` | 368 → 118 | `models/eruku.py` (InkSpire 백엔드만 남긴 `load_model`/`gen_from_style`) |
+| `train/aux_htr.py` | 217 → 53 | HTR **학습** 코드(smooth_ce, teacher_forcing, KoreanAuxDataset) |
+| `eval/echo_metrics.py` | 228 → 79 | Eruku 로더 |
+| `custom_datasets/korean/aux.py` | 242 → 22 | `split.make_dataset` |
+| `experiments/common.py` | 142 → 64 | VAE 실험 헬퍼 |
 
 ## 실행
 
@@ -50,7 +62,16 @@ GPU=2 ./train.sh inkspire
 GPU=2 ./inference.sh inkspire --lora-dir finetune_runs/inkspire_p512/lora_last \
     --lines "첫 줄" "둘째 줄" [--layout-ckpt finetune_runs/inkspire_layout/checkpoint_last.pth]
 GPU=2 ./inference.sh inkspire --dry-run        # FLUX 없이 [x | xc | mask] 캔버스만
+
+# 평가 — 중앙값·폭주율로만 판정한다(평균 금지)
+GPU=2 ./eval.sh cer --ckpt inkspire:finetune_runs/inkspire_p512/lora_last \
+    --fonts-dir assets/fonts_korean_v2/test --n 300 --coherent --binarize 200 --seed 0 \
+    --style-ref-text "다람쥐 헌 쳇바퀴에 타고파"
 ```
+
+`--ckpt` 뒤에 `,key=value` 로 `steps`·`guidance`·`std_font`·`trim_ref`·`degrade` 를 스윕할 수 있다.
+**Eruku 체크포인트는 여기서 못 돌린다** — Eruku 와 비교하려면 원본 repo 에서 같은 프로토콜로
+따로 재고 숫자를 맞춘다. 지난 측정은 [`docs/EXPERIMENTS.md`](docs/EXPERIMENTS.md).
 
 ## 필요한 자산 (전부 `.gitignore` — 심링크 권장)
 
@@ -62,13 +83,15 @@ GPU=2 ./inference.sh inkspire --dry-run        # FLUX 없이 [x | xc | mask] 캔
 | `assets/corpus/{korean_lines,english_words}.txt` | 어절 공급 |
 | `assets/backgrounds` | 종이 배경 패치 |
 | `model_zoo/flux_fill_empty_prompt.pt` | 빈 프롬프트 임베딩 캐시 (`./train.sh fetch-flux` 가 만든다) |
-| `data/ref_set_clean/train_lines.json` | 뷰어용 style ref 세트 (선택) |
+| `data/ref_set_clean/train_lines.json` | 뷰어·평가용 style ref 세트 |
+| `finetune_runs/aux_htr_ko/htr_s20000` | 한글 HTR 리더 (CER 측정용). 원본 repo 에서 학습한 것을 심링크 |
 
 ## 원본 repo 에 남긴 것
 
-**Eruku 비교 평가** — `eval/htr_cer.py`, `experiments/gen_compare.py`, `infer/show.py` 의
-`inkspire:<lora_dir>[,<layout_ckpt>]` 디스패치. 이건 Eruku 체크포인트와 한글 HTR 리더가 같이
-있어야 의미가 있어서 `Eruku_korean_finetuning` 에 둔다. 측정 결과는 그쪽 `docs/EXPERIMENTS.md` §12.
+**Eruku 본체와 그 학습·평가 경로.** 이 repo 의 `eval.sh` 는 InkSpire 백엔드만 돌린다.
+Eruku 와의 비교는 두 repo 에서 같은 프로토콜로 따로 재서 숫자를 맞춘다 —
+[`docs/EXPERIMENTS.md`](docs/EXPERIMENTS.md) 의 표가 그 방식으로 만들어졌다.
+한글 HTR 리더(`finetune_runs/aux_htr_ko`)는 양쪽 공용이라 원본을 심링크한다.
 
 ## 알려진 이슈
 

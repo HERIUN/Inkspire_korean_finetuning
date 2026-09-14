@@ -1,13 +1,22 @@
 """몽타주 그리기 헬퍼 (Eruku_korean_finetuning 에서 잘라옴).
 
 원본은 Eruku/InkSpire 양쪽 체크포인트를 로드해 비교 몽타주를 만드는 뷰어였다. 여기서는
-`infer/inkspire.py` 의 뷰어가 쓰는 그리기 헬퍼 4개만 남긴다 — `load_model` 디스패치와
-`gen_from_style` 은 Eruku 모델이 있어야 의미가 있어 원본 repo 에 둔다.
+그리기 헬퍼와 **InkSpire 백엔드만 남긴 `load_model`/`gen_from_style`** 을 둔다. Eruku 쪽
+(Emuru 로드, decoder embeds 재사용 배치 생성)은 이 repo 에 모델이 없어 안내 후 종료한다 —
+Eruku 와의 비교는 각 repo 에서 따로 돌려 숫자를 맞춘다(원본 docs/EXPERIMENTS.md §12 방식).
 """
 from __future__ import annotations
 from pathlib import Path
-import numpy as np, cv2
+import numpy as np, cv2, torch
 from PIL import Image, ImageDraw, ImageFont
+from torchvision import transforms as T
+
+DEFAULT_MAX_IMG_LEN = 8192   # Eruku 호환 인자(InkSpire 는 무시)
+
+ERUKU_HOWTO = ("Eruku 체크포인트는 이 repo 에 없다 — models/eruku.py 는 "
+               "Eruku_korean_finetuning 에 있다.\n"
+               "여기서는 `--ckpt inkspire:<lora_dir>[,<layout_ckpt>]` 만 쓴다. "
+               "Eruku 수치는 그 repo 에서 같은 프로토콜로 따로 재고 비교한다.")
 
 HERE = Path(__file__).resolve().parents[1]   # 저장소 루트
 
@@ -67,3 +76,43 @@ def render_in_font(font_path, text, size=72, pad=14):
         x0, x1 = int(xs.min()), int(xs.max()) + 1
         arr = arr[max(0, y0 - pad):y1 + pad, max(0, x0 - pad):x1 + pad]
     return arr
+
+
+def style_tensor(arr, h=64):
+    """라인이미지 배열 → style 텐서 [3,h,W] [-1,1] (BILINEAR h-리사이즈)."""
+    img = Image.fromarray(arr).convert("RGB")
+    w, hh = img.size
+    img = img.resize((max(1, int(w * (h / hh))), h), Image.BILINEAR)
+    return T.Compose([T.ToTensor(), T.Normalize((0.5,) * 3, (0.5,) * 3)])(img)
+
+
+def load_model(ckpt, device, vae_checkpoint=None):
+    """`inkspire:<lora_dir>[,<layout_ckpt>][,key=value…]` → (InkSpireGen, "inkspire").
+
+    key=value 로 steps · guidance · std_font · trim_ref · degrade 를 스윕할 수 있다.
+    """
+    if not str(ckpt).startswith("inkspire:"):
+        raise SystemExit(f"[error] {ckpt}\n{ERUKU_HOWTO}")
+    from infer.inkspire import STD_FONT, InkSpireGen
+    parts = str(ckpt)[len("inkspire:"):].split(",")
+    kw = {k: (float(v) if v.replace(".", "", 1).isdigit() else v)
+          for k, v in (x.split("=") for x in parts if "=" in x)}
+    pos = [x for x in parts if "=" not in x]
+    return InkSpireGen(pos[0], pos[1] if len(pos) > 1 and pos[1] else None, device,
+                       steps=int(kw.get("steps", 20)),
+                       guidance=kw.get("guidance", 30.0),
+                       std_font=kw.get("std_font", STD_FONT),
+                       trim_ref=bool(kw.get("trim_ref", 1)),
+                       degrade=kw.get("degrade", 0.0)), "inkspire"
+
+
+def gen_from_style(model, style_img, style_text, gen_text, cfg, max_new, device,
+                   max_img_len=DEFAULT_MAX_IMG_LEN, seed=None):
+    """style 텐서([3,h,W] 또는 [1,3,h,W]) → 생성 라인이미지 [H,W] uint8.
+
+    cfg/max_new/max_img_len 은 Eruku 호환용이고 InkSpire 는 무시한다."""
+    if not hasattr(model, "gen"):
+        raise SystemExit(f"[error] gen_from_style: InkSpire 생성기가 아니다\n{ERUKU_HOWTO}")
+    t = style_img[0] if style_img.dim() == 4 else style_img
+    arr = ((t[0].float().cpu().numpy() + 1) * 127.5).clip(0, 255).astype(np.uint8)
+    return model.gen(arr, style_text, gen_text, seed or 0)
