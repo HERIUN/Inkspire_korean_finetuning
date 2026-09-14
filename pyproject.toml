@@ -1,0 +1,22 @@
+[project]
+name = "inkspire-korean"
+version = "0.1.0"
+description = "InkSpire (Wang et al., ICLR 2026) 한글 재현 — FLUX.1-Fill LoRA + 레이아웃 CFM"
+requires-python = ">=3.11"
+dependencies = [
+    "torch>=2.4",
+    "diffusers>=0.38",       # FluxFillPipeline._pack_latents / calculate_shift / time_shift
+    "peft>=0.18",            # LoRA 주입·저장 (load_lora_adapter adapter_name)
+    "prodigyopt>=1.1",       # 논문 옵티마이저 (--optimizer adamw 면 불필요)
+    "transformers>=4.44",    # tools/fetch_flux.py 의 텍스트 인코더 (빈 프롬프트 캐시 1회)
+    "huggingface-hub>=0.26",
+    "safetensors>=0.4",
+    "numpy>=1.26",
+    "opencv-python>=4.10",
+    "pillow>=10.0",
+    "fonttools>=4.53",       # 폰트 cmap 스캔 (fonts_charsets.json)
+    "pyyaml>=6.0",
+]
+
+[tool.setuptools]
+py-modules = []

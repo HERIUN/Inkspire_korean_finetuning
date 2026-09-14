@@ -2,59 +2,80 @@
 
 논문 *Learning to Generate Stylized Handwritten Text via a Unified Representation of Style,
 Content, and Noise* (Wang et al., ICLR 2026, OpenReview `FBPuLChGNX`) 의 한글 재현 구현.
-코드 미공개라 논문만 보고 구현했다.
+코드 미공개라 논문만 보고 구현했다. `Eruku_korean_finetuning` 에서 분리해 나왔다.
 
 - 설계·이슈·측정값: [`docs/inkspire.md`](docs/inkspire.md)
 - 논문 PDF 는 `.gitignore` 로 제외했다(12MB, 저작권). 필요하면 `docs/inkspire.pdf` 로 직접 넣는다.
 
-## 구성
+## 구조
+
+두 단계 분해 `p(X, Xc | C, Xs) = p(Xc | C, Xs) · p(X | Xs, Xc)`.
 
 | 경로 | 역할 |
 |---|---|
-| `custom_datasets/korean/page.py` | 페이지 렌더러 + 두 데이터셋(P×P 패치 / 페이지 토큰). 글자별 bbox 를 렌더 시점에 얻는다 |
-| `models/inkspire.py` | 이미지 모델 — FLUX.1-Fill-dev + LoRA r=32 (115.9M, 논문 표 8), R-APE, 텍스트 인코더 제거 |
-| `models/inkspire_layout.py` | 레이아웃 모델 — masked CFM transformer 10층/512/8h |
-| `train/inkspire.py`, `train/inkspire_layout.py` | 각 트레이너 |
+| `custom_datasets/korean/page.py` | 페이지 렌더러 + 두 데이터셋. 글자별 bbox 를 렌더 시점에 공짜로 얻는다 |
+| `models/inkspire_layout.py` | ① 레이아웃 — masked CFM transformer 10층/512/8h, v-pred L1, 10-step ODE |
+| `models/inkspire.py` | ② 이미지 — FLUX.1-Fill-dev + LoRA r=32 (115.9M, 논문 표 8), R-APE, 텍스트 인코더 제거 |
+| `train/inkspire_layout.py`, `train/inkspire.py` | 각 트레이너 |
 | `infer/inkspire.py` | one-shot 생성기 + 뷰어 (`InkSpireGen.gen`) |
 | `tools/fetch_flux.py` | FLUX 가중치 1회 다운로드 + 빈 프롬프트 임베딩 캐시 |
-| `configs/inkspire*.yaml` | 조절 가능한 전부 |
+| `configs/*.yaml` | 조절 가능한 전부 |
 
-self-check (외부 의존 없는 것만):
+지원 모듈(`configs/loader.py`, `custom_datasets/korean/{fontset,split,alphabet}.py`,
+`train/core.py`, `infer/show.py`)은 원본 repo 에서 가져왔고, `split.py`·`train/core.py`·
+`infer/show.py` 는 **여기서 쓰는 심볼만 남기고 잘라냈다** — 그래야 Eruku 모델과
+`custom_datasets/upstream/font_square/*` 의존이 사라진다. 각 파일 docstring 에 무엇을 왜
+버렸는지 적어 뒀다.
+
+## 실행
 
 ```bash
-python models/inkspire.py --smoke          # tiny 모델, 다운로드 없음
-python models/inkspire_layout.py --smoke   # 마스크 규칙·과적합·ckpt 왕복
+uv sync                      # 또는 pip install -e .
+ln -s <경로> assets          # 아래 「필요한 자산」 참고
+ln -s <경로> data            # 뷰어의 style ref 세트(선택)
+
+# 의존 없는 self-check
+python models/inkspire.py --smoke              # tiny 모델, 다운로드 없음
+python models/inkspire_layout.py --smoke       # 마스크 규칙·과적합·ckpt 왕복
+python custom_datasets/korean/page.py --n 4    # bbox 왕복·shape·마스크·collate + PNG 덤프
+
+# ① 레이아웃 (FLUX 불필요)
+GPU=2 ./train.sh inkspire-layout
+
+# ② 이미지
+GPU=2 ./train.sh fetch-flux                    # hf auth login + 라이선스 수락 선행, 34GB
+GPU=2 ./train.sh inkspire
+
+# 추론
+GPU=2 ./inference.sh inkspire --lora-dir finetune_runs/inkspire_p512/lora_last \
+    --lines "첫 줄" "둘째 줄" [--layout-ckpt finetune_runs/inkspire_layout/checkpoint_last.pth]
+GPU=2 ./inference.sh inkspire --dry-run        # FLUX 없이 [x | xc | mask] 캔버스만
 ```
 
-## ★ 아직 standalone 이 아니다
+## 필요한 자산 (전부 `.gitignore` — 심링크 권장)
 
-`Eruku_korean_finetuning` 에서 갈라져 나온 스냅샷이라, 아래는 **아직 원본 repo 에 있고 여기 없다.**
-`models/*.py` 두 개만 저장소-로컬 import 가 없어 그대로 돌아간다.
-
-**코드**
-
-| 원본 경로 | 여기서 쓰는 심볼 |
+| 경로 | 내용 |
 |---|---|
-| `configs/loader.py` | `parse_args`, `PATH_KEYS`(inkspire 키 4개 포함) |
-| `train/core.py` | `PATH_ARGS`, `data_paths_of`, `log_run_config`, `require_optim_state`, `load_rng_state`, `rng_state` |
-| `custom_datasets/korean/fontset.py` | `aug_elastic`, `aug_morph`, `bg_patch`, `composite`, `jitter` |
-| `custom_datasets/korean/split.py` | `ensure_font_charsets`, `font_files`, `build_samplers`, `data_paths`, `DEFAULT_EXCLUDE_FONTS` |
-| `custom_datasets/korean/alphabet.py` | `load_charset` (vocab 2,509자) |
-| `infer/show.py` | `FONTS_DIR`, `cell`, `label_img`, `render_in_font` (뷰어 전용) + `inkspire:` 디스패치 |
-| `eval/htr_cer.py`, `experiments/gen_compare.py` | 평가 진입점 |
-| `train.sh` / `inference.sh` / `eval.sh` | `inkspire`, `inkspire-layout`, `fetch-flux` 서브커맨드 |
+| `assets/fonts_korean_v3/train` | 스타일 폰트 풀 12,951종 (+ `fonts_charsets.json`) |
+| `assets/fonts_korean_v2/test` | held-out 폰트 16종 (val) |
+| `assets/fonts_label/NanumGothic-Regular.ttf` | Xc 표준폰트. 스타일 풀에서는 `exclude_fonts` 로 제외 |
+| `assets/corpus/{korean_lines,english_words}.txt` | 어절 공급 |
+| `assets/backgrounds` | 종이 배경 패치 |
+| `model_zoo/flux_fill_empty_prompt.pt` | 빈 프롬프트 임베딩 캐시 (`./train.sh fetch-flux` 가 만든다) |
+| `data/ref_set_clean/train_lines.json` | 뷰어용 style ref 세트 (선택) |
 
-`train/core.py` 와 `custom_datasets/korean/split.py` 는 각각 `models/eruku.py`,
-`custom_datasets/upstream/font_square/*` 를 끌어온다 — 그래서 그냥 복사하면 Eruku 본체가 딸려 온다.
-분리를 끝내려면 위 6개 헬퍼를 작은 모듈로 뽑아내고 `infer/show.py` import 를 지연 로드로 바꿔야 한다.
+## 원본 repo 에 남긴 것
 
-**자산** (전부 `.gitignore`)
+**Eruku 비교 평가** — `eval/htr_cer.py`, `experiments/gen_compare.py`, `infer/show.py` 의
+`inkspire:<lora_dir>[,<layout_ckpt>]` 디스패치. 이건 Eruku 체크포인트와 한글 HTR 리더가 같이
+있어야 의미가 있어서 `Eruku_korean_finetuning` 에 둔다. 측정 결과는 그쪽 `docs/EXPERIMENTS.md` §12.
 
-`assets/fonts_korean_v3/train`(12,951종) · `assets/fonts_korean_v2/test`(held-out) ·
-`assets/fonts_label/NanumGothic-Regular.ttf`(Xc 표준폰트) · `assets/corpus/*` ·
-`assets/backgrounds` · `model_zoo/flux_fill_empty_prompt.pt`
+## 알려진 이슈
 
-**의존성**: `diffusers>=0.38`, `peft>=0.18`, `prodigyopt>=1.1`, torch, opencv, pillow
+- **기존 레이아웃 체크포인트는 무효다.** Δy 기준을 이전 줄 max y1 → 평균 y1 로 바꿔서
+  (회전 증강 대응, 줄 간 편차 5.60px → 1.78px) 학습 규약이 달라졌다. 재학습해야 한다.
+  이미지 LoRA 는 영향 없다.
+- 논문 대비 남은 편차와 미검증 가설은 [`docs/inkspire.md`](docs/inkspire.md) §5 참고.
 
 ## 라이선스 주의
 
