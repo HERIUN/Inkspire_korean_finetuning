@@ -63,7 +63,7 @@ def make_parser():
     p.add_argument("--val-every", type=int, default=1000, help="0=off")
     p.add_argument("--val-batches", type=int, default=4)
     p.add_argument("--val-seed", type=int, default=1234)
-    p.add_argument("--val-fonts-dir", default=None, help="held-out 폰트(기본 assets/fonts_korean_v2/test)")
+    p.add_argument("--val-fonts-dir", default=None, help="held-out 폰트(기본 assets/fonts/test)")
     p.add_argument("--allow-fresh-optim", action="store_true", help="resume 시 optimizer 복원 실패 허용")
     p.add_argument("--config", default=str(HERE / "configs/inkspire_layout.yaml"))
     return p
@@ -122,7 +122,7 @@ def main():
     val_batches = []
     if args.val_every > 0:
         vds = make_ds(args, args.val_seed, args.val_batches * args.batch_size,
-                      fonts_dir=args.val_fonts_dir or str(HERE / "assets/fonts_korean_v2/test"))
+                      fonts_dir=args.val_fonts_dir or str(HERE / "assets/fonts/test"))
         val_batches = list(DataLoader(vds, batch_size=args.batch_size, collate_fn=layout_collate,
                                       num_workers=args.num_workers))
         print(f"val fonts {len(vds.fonts)}  batches {len(val_batches)}")

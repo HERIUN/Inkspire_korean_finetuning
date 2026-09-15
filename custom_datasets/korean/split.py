@@ -21,8 +21,7 @@ from custom_datasets.korean import fontset as G
 DEFAULT_PATHS = {
     "corpus_korean": ASSETS / "corpus/korean_lines.txt",    # 한글 어절 공급
     "corpus_english": ASSETS / "corpus/english_words.txt",  # 영어 단어 사전
-    "korean_fonts_dir": ASSETS / "fonts_korean_v2/train",   # 한글 writer 풀 (+ fonts_charsets.json)
-    "backgrounds_dir": ASSETS / "backgrounds",              # style 종이 배경 패치
+    "korean_fonts_dir": ASSETS / "fonts/train",             # 스타일 폰트 풀 (+ fonts_charsets.json)
 }
 
 

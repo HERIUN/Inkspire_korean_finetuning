@@ -17,7 +17,7 @@
 
 | 항목 | 값 |
 |---|---|
-| 데이터 | 합성 폰트 페이지(`fonts_korean_v3/train` 12,951종, NanumGothic 제외), line_h U(40,80), P=512 패치, R-Mask |
+| 데이터 | 합성 폰트 페이지(`assets/fonts/train` 12,951종, NanumGothic 제외), line_h U(40,80), P=512 패치, R-Mask |
 | 이미지 모델 | FLUX.1-Fill-dev + LoRA r=32/α=32 (115.9M, 표 8 13종), R-APE, 텍스트 인코더 제거(빈 프롬프트 캐시), guidance 30 |
 | 이미지 학습 | Prodigy lr 1 wd 0.01, batch 4, grad clip 1.0, 20k step, GPU 2 (H100 96GB). 실측 2.6 s/step → 20k ≈ 14.5h (계획 7~9h 과소) |
 | 레이아웃 모델 | masked CFM transformer 10층/512/8h (33M) + line_emb, 정규화 버퍼, 무레퍼런스 모드 10% |
@@ -80,7 +80,7 @@ BEST=finetune_runs/eruku_corpusmax/checkpoint_last.pth
 INK=inkspire:finetune_runs/inkspire_p512/lora_last,finetune_runs/inkspire_layout/checkpoint_last.pth
 GPU=2 ./inference.sh inkspire --lora-dir finetune_runs/inkspire_p512/lora_last \
     --layout-ckpt finetune_runs/inkspire_layout/checkpoint_last.pth --lines "첫 줄" "둘째 줄" "셋째 줄"
-for F in assets/fonts_korean_v2/train assets/fonts_korean_v2/test assets/custom_hw_fonts; do for CK in $BEST $INK; do
+for F in assets/fonts/ref assets/fonts/test assets/custom_hw_fonts;   # 경로는 당시 원본 repo 기준 do for CK in $BEST $INK; do
   GPU=2 ./eval.sh cer --ckpt $CK --fonts-dir $F --n 300 --coherent --binarize 200 --seed 0 \
       --style-ref-text "다람쥐 헌 쳇바퀴에 타고파" --out finetune_runs/_eval/inkspire_$(basename $F)_${CK%%:*}_sref.txt
   GPU=2 ./eval.sh cer --ckpt $CK --fonts-dir $F --n 300 --coherent --binarize 200 --seed 0 \

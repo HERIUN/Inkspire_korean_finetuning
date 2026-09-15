@@ -26,9 +26,9 @@
 
 | 항목 | 결정 | 이유 |
 |---|---|---|
-| 데이터 | Eruku 와 같은 **합성 폰트 페이지**(`fonts_korean_v3/train` 12,951종). 글자별 bbox 는 렌더 시 공짜 | 실손글씨 페이지+레이아웃 라벨이 없음 |
+| 데이터 | Eruku 와 같은 **합성 폰트 페이지**(`assets/fonts/train` 12,951종). 글자별 bbox 는 렌더 시 공짜 | 실손글씨 페이지+레이아웃 라벨이 없음 |
 | 패치 P | 기본 512 (1024 옵션) | 단일 GPU. 64px 라인 기준 512 에 6~8줄 |
-| 콘텐츠 폰트(Xc) | **NanumGothic-Regular**(`assets/fonts_label/NanumGothic-Regular.ttf`). `configs/inkspire.yaml data.std_font` / `configs/infer.yaml inkspire.std_font` 로 노출, 학습·추론이 같아야 한다. 스타일 폰트 풀에서는 `exclude_fonts: [NanumGothic]` 으로 제외 | 라벨 렌더에 이미 쓰던 자산(신규 자산 없음). 표준폰트가 스타일로 다시 나오면 과제가 복사로 퇴화 |
+| 콘텐츠 폰트(Xc) | **NanumGothic-Regular**(`assets/fonts/label/NanumGothic-Regular.ttf`). `configs/inkspire.yaml data.std_font` / `configs/infer.yaml inkspire.std_font` 로 노출, 학습·추론이 같아야 한다. 스타일 폰트 풀에서는 `exclude_fonts: [NanumGothic]` 으로 제외 | 라벨 렌더에 이미 쓰던 자산(신규 자산 없음). 표준폰트가 스타일로 다시 나오면 과제가 복사로 퇴화 |
 | 텍스트 인코더 | 빈 프롬프트 임베딩 1회 캐시 → 학습·추론에 T5-XXL/CLIP 미탑재 | 논문: 텍스트 인코더 제거. 0 벡터가 아니라 실제 빈 프롬프트 임베딩이어야 백본이 분포 안에서 시작 |
 | guidance | 30 고정(학습=추론) | Fill-dev 인페인팅 동작점. 텍스트가 없으니 상수 조건 스칼라, train/infer 동일성만 중요. 논문 미기재 |
 | 레이아웃 모델 | Masked+CFM 만 구현(AR/Masked 변형 생략) | 표 1 에서 열세 |

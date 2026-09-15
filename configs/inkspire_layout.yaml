@@ -35,8 +35,7 @@ optim:                               # 논문: batch 160, AdamW 1e-4
 paths:
   corpus_korean: assets/corpus/korean_lines.txt
   corpus_english: assets/corpus/english_words.txt
-  korean_fonts_dir: assets/fonts_korean_v3/train    # 12,951종 (best run 과 동일)
-  backgrounds_dir: assets/backgrounds
+  korean_fonts_dir: assets/fonts/train    # 12,951종 (best run 과 동일)
 
 data:
   P: 512                             # 페이지 줄 수 = ceil(P/pitch)+U(0,3) — 이미지 모델과 같은 페이지 분포
@@ -62,4 +61,4 @@ val:
   val_every: 1000                    # val loss + sample(steps=10) 의 생성 토큰 bbox L1(px)
   val_batches: 4
   val_seed: 1234
-  val_fonts_dir: assets/fonts_korean_v2/test        # held-out 16종
+  val_fonts_dir: assets/fonts/test        # held-out 16종

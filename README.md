@@ -42,7 +42,7 @@ CER 을 재려면 거기서 잰다.
 
 ```bash
 uv sync                      # 또는 pip install -e .
-ln -s <경로> assets          # 아래 「필요한 자산」 참고
+# assets/ 구성은 아래 「필요한 자산」 참고 (폰트·코퍼스 심링크)
 ln -s <경로> data            # 뷰어의 style ref 세트(선택)
 
 # 의존 없는 self-check
@@ -71,15 +71,47 @@ GPU=2 ./eval.sh exp gen_compare --ckpt-after inkspire:finetune_runs/inkspire_p51
 
 ## 필요한 자산 (전부 `.gitignore` — 심링크 권장)
 
-| 경로 | 내용 |
-|---|---|
-| `assets/fonts_korean_v3/train` | 스타일 폰트 풀 12,951종 (+ `fonts_charsets.json`) |
-| `assets/fonts_korean_v2/test` | held-out 폰트 16종 (val) |
-| `assets/fonts_label/NanumGothic-Regular.ttf` | Xc 표준폰트. 스타일 풀에서는 `exclude_fonts` 로 제외 |
-| `assets/corpus/{korean_lines,english_words}.txt` | 어절 공급 |
-| `assets/backgrounds` | 종이 배경 패치 |
-| `model_zoo/flux_fill_empty_prompt.pt` | 빈 프롬프트 임베딩 캐시 (`./train.sh fetch-flux` 가 만든다) |
-| `data/ref_set_clean/train_lines.json` | 뷰어·평가용 style ref 세트 |
+```
+assets/
+  fonts/train    스타일 폰트 풀 12,951종 (+ fonts_charsets.json, 첫 실행 때 자동 생성)
+  fonts/test     held-out 16종 — val·평가
+  fonts/ref      뷰어·몽타주의 style ref writer 폰트 83종
+  fonts/label    Xc 표준폰트 NanumGothic-Regular.ttf (+ Bold, 몽타주 라벨용)
+  corpus/        korean_lines.txt · english_words.txt · chars.txt
+  korean_charset.json   고정 charset 2,509자 (레이아웃 vocab 의 원천)
+data/ref_set_clean/train_lines.json    뷰어의 style ref 세트 (선택)
+model_zoo/flux_fill_empty_prompt.pt    빈 프롬프트 임베딩 캐시 (`./train.sh fetch-flux` 가 만든다)
+```
+
+디렉토리 이름은 이 repo 기준이다. 원본 repo 의 `fonts_korean_v3/train` 등에서 가져온다면
+그 이름 그대로 두지 말고 위 구조로 심링크한다:
+
+```bash
+E=<Eruku_korean_finetuning>/assets
+mkdir -p assets/fonts
+ln -s $E/fonts_korean_v3/train assets/fonts/train
+ln -s $E/fonts_korean_v2/test  assets/fonts/test
+ln -s $E/fonts_korean_v2/train assets/fonts/ref
+ln -s $E/fonts_label           assets/fonts/label
+ln -s $E/corpus                assets/corpus
+ln -s $E/korean_charset.json   assets/korean_charset.json
+```
+
+### 어디서 받나
+
+| 자산 | 취득 | 출처·라이선스 |
+|---|---|---|
+| 한글 폰트 풀 | [`assets/download_script/tools_fetch_free.py`](https://github.com/HERIUN/Eruku_korean_finetuning/blob/main/assets/download_script/tools_fetch_free.py) `--src noonnu\|ownglyph` | 눈누 / 온글잎 무료 한글 폰트. 페이지의 라이선스 요약을 카탈로그에 같이 기록한다 |
+| 〃 (구글) | [`tools_fetch_gf.py`](https://github.com/HERIUN/Eruku_korean_finetuning/blob/main/assets/download_script/tools_fetch_gf.py) `--lang ko` | [google/fonts](https://github.com/google/fonts). KS X 1001 커버리지로 거른다 |
+| train/test 분할 | [`tools/make_holdout_split.py`](https://github.com/HERIUN/Eruku_korean_finetuning/blob/main/tools/make_holdout_split.py) | 결정적 분할, 심링크만 만든다(복사하면 15GB 중복) |
+| 한글 어절 (`corpus/korean_lines.txt`) | [`tools/fetch_corpus.py`](https://github.com/HERIUN/Eruku_korean_finetuning/blob/main/tools/fetch_corpus.py) | 한국어 위키백과 (CC BY-SA 4.0) — HF [`heegyu/kowiki-sentences`](https://huggingface.co/datasets/heegyu/kowiki-sentences) 에서 추출. 고정 charset ∩ 폰트 교집합 밖의 글자가 있는 줄은 버린다. 상세는 [`assets/corpus/README.md`](https://github.com/HERIUN/Eruku_korean_finetuning/blob/main/assets/corpus/README.md) |
+| 영어 단어 (`corpus/english_words.txt`) | 〃 | [dwyl/english-words](https://github.com/dwyl/english-words) |
+| 표준폰트 (`fonts/label`) | 직접 배치 | [나눔고딕](https://hangeul.naver.com/font) (SIL OFL 1.1) |
+| FLUX.1-Fill-dev 34GB | `./train.sh fetch-flux` | [black-forest-labs/FLUX.1-Fill-dev](https://huggingface.co/black-forest-labs/FLUX.1-Fill-dev) — **게이트 repo · 비상업 라이선스**. `hf auth login` + 모델 페이지 라이선스 수락 선행 |
+
+`assets/backgrounds` 는 더 이상 쓰지 않는다. 종이 배경 패치라는 이름과 달리 3장 전부 단색
+(246 / 239 / 255, std 0.0)이라 종이 톤 셋 중 하나를 고르는 것뿐이었고, `jitter`(밝기 ±12)가
+이미 더 넓게 덮는다. 종이는 흰색 고정이고 `composite` 의 잉크 농도·alpha 증강은 그대로다.
 
 ## 원본 repo 에 남긴 것
 
@@ -135,7 +167,10 @@ w·h·Δy 는 논문 표 1 보다 낫다. 무너지는 건 추론이고, 이유�
   새 Δy 규약은 공짜로 딸려온다.
 - **`aug=false` 는 레이아웃 트레이너에만 해당한다.** 이미지 LoRA 는 증강을 끄면 깨끗한 폰트 렌더를
   학습한다(docs §8). 애초에 이미지 LoRA 는 `layout_seq` 를 안 써서 Δy 규약과도 무관하다 —
-  09-10 run 의 val 샘플을 현재 코드로 재생성해 xc 는 픽셀 단위 동일, x 는 최대 6/255 차이로 확인했다.
+  09-10 run 의 val 샘플을 현재 코드로 재생성해 xc 는 픽셀 단위 동일, x 는 최대 6/255 차이였다.
+- **배경 제거로 이미지 학습 데이터가 조금 바뀌었다.** 종이 톤이 {239, 246, 255} 랜덤에서 255 고정이
+  됐다(`jitter` 의 ±12 는 그대로). 배포된 `lora_step_020000` 은 옛 분포로 학습된 것이라 다시
+  학습하면 그만큼 다르다. `composite` 의 잉크 농도·alpha 증강은 유지했다.
 - 논문 대비 남은 편차와 미검증 가설은 [`docs/inkspire.md`](docs/inkspire.md) §5 참고.
 
 ## 라이선스 주의

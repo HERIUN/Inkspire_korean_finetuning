@@ -21,7 +21,7 @@ from custom_datasets.korean import fontset as G   # log_run_config 의 sampler_c
 
 
 #: config/CLI 인자 이름 → korean/split.py DEFAULT_PATHS 키
-PATH_ARGS = ("korean_fonts_dir", "backgrounds_dir", "corpus_korean", "corpus_english")
+PATH_ARGS = ("korean_fonts_dir", "corpus_korean", "corpus_english")
 
 
 def data_paths_of(args) -> dict:

@@ -13,5 +13,5 @@ common:
   seed: 0
   english: false         # true 면 영어 텍스트/라틴 폰트로 평가
   no_style_text: false   # style 텍스트를 비우고 이미지만 조건으로 (p_drop 학습 확인용)
-  fonts_dir: assets/fonts_korean_v2/train   # 평가용 폰트. held-out 은 fonts_korean_v2/test
+  fonts_dir: assets/fonts/ref   # 몽타주용 style ref writer 폰트. held-out 은 assets/fonts/test
   device: cuda

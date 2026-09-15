@@ -34,16 +34,15 @@ optim:                               # 논문: Prodigy lr=1, wd 0.01, batch 4, 2
 paths:
   corpus_korean: assets/corpus/korean_lines.txt
   corpus_english: assets/corpus/english_words.txt
-  korean_fonts_dir: assets/fonts_korean_v3/train
-  backgrounds_dir: assets/backgrounds
+  korean_fonts_dir: assets/fonts/train
 
 data:
   P: 512                             # 패치 크기 (논문 1024). 1024 는 B=2 ≈ 50GB
   page_w: 1024
-  std_font: assets/fonts_label/NanumGothic-Regular.ttf   # Xc(콘텐츠 이미지) 표준폰트. 스타일 풀에서는 exclude_fonts 로 제외
+  std_font: assets/fonts/label/NanumGothic-Regular.ttf   # Xc(콘텐츠 이미지) 표준폰트. 스타일 풀에서는 exclude_fonts 로 제외
   mask_mode: rand                    # rand = R-Mask (논문) | top = 행 ≥ P/8 마스크(F-TopMask)
   exclude_fonts: [UlsanJunggu, NanumGothic]
-  aug: true                          # 줄 회전·elastic·morph·blur·배경·jitter
+  aug: true                          # 줄 회전·elastic·morph·blur·잉크농도·jitter
   sampler:
     weights:
       ko: 0.45
@@ -65,4 +64,4 @@ val:                                 # mode="line" 고정 배치: 첫 줄 아래
   val_batches: 2
   val_seed: 1234
   val_steps: 20                      # generate ODE step
-  val_fonts_dir: assets/fonts_korean_v2/test
+  val_fonts_dir: assets/fonts/test

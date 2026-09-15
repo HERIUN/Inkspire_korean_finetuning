@@ -5,7 +5,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
 HERE = Path(__file__).resolve().parent
-F = str(HERE.parent / "assets/fonts_label/NanumGothic-Regular.ttf")
+F = str(HERE.parent / "assets/fonts/label/NanumGothic-Regular.ttf")
 big, mid, small = (ImageFont.truetype(F, s) for s in (19, 15, 12))
 CELL, GAP = 46, 3
 X_BG, C_BG, TXT = (214, 231, 247), (252, 232, 214), (40, 40, 40)

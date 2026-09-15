@@ -38,7 +38,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]   # configs/ 의 부모 = 저장
 # (cwd 가 어디든 같은 곳을 가리키게. 이미 절대경로면 그대로 둔다.)
 PATH_KEYS = frozenset({
     "english_fonts_dir", "val_fonts_dir", "val_english_fonts_dir",
-    "korean_fonts_dir", "backgrounds_dir",
+    "korean_fonts_dir",
     "corpus_korean", "corpus_english",
     "lines_json", "resume", "ocr_checkpoint",
     # eval / infer
@@ -137,7 +137,7 @@ def parse_args(parser: argparse.ArgumentParser, argv=None, default_config=None, 
 
 #: 없으면 학습이 곧바로 실패하는 입력 자산 (모델 ckpt 는 HF 자동 다운로드라 제외)
 REQUIRED_PATHS = ("corpus_korean", "corpus_english",
-                  "korean_fonts_dir", "backgrounds_dir", "english_fonts_dir")
+                  "korean_fonts_dir", "english_fonts_dir")
 
 
 def check_paths(args) -> list[str]:

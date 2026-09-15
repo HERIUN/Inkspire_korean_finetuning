@@ -79,7 +79,7 @@ def make_parser():
     p.add_argument("--val-batches", type=int, default=2)
     p.add_argument("--val-seed", type=int, default=1234)
     p.add_argument("--val-steps", type=int, default=20, help="generate ODE step")
-    p.add_argument("--val-fonts-dir", default=None, help="held-out 폰트(기본 assets/fonts_korean_v2/test)")
+    p.add_argument("--val-fonts-dir", default=None, help="held-out 폰트(기본 assets/fonts/test)")
     p.add_argument("--allow-fresh-optim", action="store_true")
     p.add_argument("--config", default=str(HERE / "configs/inkspire.yaml"))
     return p
@@ -113,7 +113,7 @@ def main():
     val = []
     if args.val_every > 0:
         vds = KoreanPageDataset(mode="line", length=args.val_batches * args.batch_size, seed=args.val_seed,
-                                fonts_dir=args.val_fonts_dir or str(HERE / "assets/fonts_korean_v2/test"), **kw)
+                                fonts_dir=args.val_fonts_dir or str(HERE / "assets/fonts/test"), **kw)
         val = list(DataLoader(vds, batch_size=args.batch_size, num_workers=args.num_workers))
         print(f"val fonts {len(vds.fonts)}  batches {len(val)} (mode=line)")
 

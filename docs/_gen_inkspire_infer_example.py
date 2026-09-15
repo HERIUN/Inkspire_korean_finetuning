@@ -5,7 +5,7 @@ ROOT = Path("/data/work/dgkang/Eruku_korean_finetuning"); sys.path.insert(0, str
 from infer.inkspire import InkSpireGen
 from infer.show import label_img, render_in_font
 
-FONT = ROOT / "assets/fonts_korean_v2/test/Gaegu.ttf"
+FONT = ROOT / "assets/fonts/test/Gaegu.ttf"
 STYLE, TARGET = "다람쥐 헌 쳇바퀴에 타고파", "한국어 손글씨 생성 2024"
 OUT = ROOT / "docs/img_inkspire_io/05_infer_example.png"
 

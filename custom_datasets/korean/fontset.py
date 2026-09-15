@@ -16,7 +16,7 @@ dilation/erosion) 를 grayscale 단독 구현으로 미러링한다. torch/compi
 
 Usage:
   python custom_datasets/korean/fontset.py \
-      --fonts-dir ../fonts_korean_v2 \
+      --fonts-dir ../fonts \
       --corpus ../font_ai_pipeline_work/benchmark/train_lines.json \
       --bg-dir ../font_ai_pipeline_work/bg_textrenderer \
       --out data/korean_fontset_pilot \
@@ -391,9 +391,9 @@ def save_montage(rows: list[dict], path: Path, n: int = 12):
 def main():
     ap = argparse.ArgumentParser()
     HERE = Path(__file__).resolve().parents[2]   # 저장소 루트
-    ap.add_argument("--fonts-dir", default=str(HERE / "assets" / "fonts_korean_v2"))
+    ap.add_argument("--fonts-dir", default=str(HERE / "assets" / "fonts"))
     ap.add_argument("--corpus", default=str(HERE / "assets" / "corpus" / "korean_lines.txt"))
-    ap.add_argument("--bg-dir", default=str(HERE / "assets" / "backgrounds"))
+    ap.add_argument("--bg-dir", default="", help="종이 배경 패치 디렉토리(선택). 비우면 흰 종이")
     ap.add_argument("--out", default=str(HERE / "data" / "korean_fontset_pilot"))
     ap.add_argument("--per-font-train", type=int, default=100)
     ap.add_argument("--per-font-val", type=int, default=30)

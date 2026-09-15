@@ -20,13 +20,13 @@ ERUKU_HOWTO = ("Eruku 체크포인트는 이 repo 에 없다 — models/eruku.py
 HERE = Path(__file__).resolve().parents[1]   # 저장소 루트
 
 
-GOTHIC = str(HERE / "assets" / "fonts_label" / "NanumGothic-Regular.ttf")
+GOTHIC = str(HERE / "assets" / "fonts" / "label" / "NanumGothic-Regular.ttf")
 
 
-GOTHIC_B = str(HERE / "assets" / "fonts_label" / "NanumGothic-Bold.ttf")
+GOTHIC_B = str(HERE / "assets" / "fonts" / "label" / "NanumGothic-Bold.ttf")
 
 
-FONTS_DIR = HERE / "assets" / "fonts_korean_v2" / "train"
+FONTS_DIR = HERE / "assets" / "fonts" / "ref"
 
 
 def label_img(text, w, h, size, bold=False, center=True, bg=255):

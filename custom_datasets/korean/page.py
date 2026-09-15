@@ -39,8 +39,8 @@ sys.path.insert(0, str(HERE))
 from custom_datasets.korean import fontset as G          # noqa: E402
 from custom_datasets.korean import split                 # noqa: E402
 
-STD_FONT = ASSETS / "fonts_label/NanumGothic-Regular.ttf"      # Xc(콘텐츠 이미지) 표준폰트
-DEFAULT_FONTS_DIR = ASSETS / "fonts_korean_v3/train"          # 12,951종 (best run 과 동일)
+STD_FONT = ASSETS / "fonts/label/NanumGothic-Regular.ttf"      # Xc(콘텐츠 이미지) 표준폰트
+DEFAULT_FONTS_DIR = ASSETS / "fonts/train"                    # 스타일 폰트 풀 12,951종
 #: 표준폰트와 같은 family 는 style 풀에서 뺀다 — Xc 와 X 가 같은 글꼴이면 스타일 학습이 안 됨.
 EXCLUDE_FONTS = list(split.DEFAULT_EXCLUDE_FONTS) + ["NanumGothic"]
 STRIP_PAD = 32          # 줄 strip 상하 여유 px. ±3° 회전 시 1024px 폭 끝이 ~27px 움직인다.
@@ -172,7 +172,7 @@ def _rotate_strip(strip, boxes, y_off, deg):
 
 def render_page(font_path, lines: list[str], std_font_path=STD_FONT, page_w: int = 1024,
                 line_h_px: float = 64, rng: random.Random = None, aug: bool = True,
-                pitch: int = None, bgs: list = None) -> dict:
+                pitch: int = None) -> dict:
     """페이지 합성. 반환 {x u8[H,W], xc u8[H,W], chars, bboxes int32[N,4], line_id int32[N],
     page_w, pitch, line_top list[int]}.
 
@@ -215,9 +215,10 @@ def render_page(font_path, lines: list[str], std_font_path=STD_FONT, page_w: int
             x = G.aug_morph(x, rng)
         if rng.random() < 0.4:
             x = cv2.GaussianBlur(x, (3, 3), 0)
-        use_white = (not bgs) or rng.random() < 0.3
-        bg = np.full((H, page_w), 255.0, np.float32) if use_white else G.bg_patch(bgs, H, page_w, rng)
-        x = G.composite(x, bg, rng.uniform(0, 55), rng.uniform(0.7, 1.0))
+        # 종이는 흰색 고정. 예전엔 assets/backgrounds 에서 패치를 뽑았는데 그 3장이 전부 단색
+        # (246/239/255, std 0.0)이라 종이 톤 3개를 고르는 것뿐이었고 jitter(밝기 ±12)가 이미 덮는다.
+        x = G.composite(x, np.full((H, page_w), 255.0, np.float32),
+                        rng.uniform(0, 55), rng.uniform(0.7, 1.0))   # 잉크 농도·alpha 증강은 유지
         if rng.random() < 0.5:
             x = G.jitter(x, rng)
     return {"x": x, "xc": xc, "chars": chars, "bboxes": boxes,
@@ -344,10 +345,6 @@ class KoreanPageDataset(torch.utils.data.Dataset):
         self.charsets = json.load(open(fonts_dir / "fonts_charsets.json"))
         _, self.gen = split.build_samplers((1, 8), (1, 32), seed=seed, sampler_cfg=sampler_cfg,
                                            paths=paths, fonts_dir=fonts_dir, exclude_fonts=exc)
-        bg_dir = split.data_paths(paths)["backgrounds_dir"]
-        self.bgs = [im for p in sorted(Path(bg_dir).glob("*"))
-                    if p.suffix.lower() in (".png", ".jpg", ".jpeg")
-                    and (im := cv2.imread(str(p), cv2.IMREAD_GRAYSCALE)) is not None] if aug else []
 
     def __len__(self):
         return self.length
@@ -375,7 +372,7 @@ class KoreanPageDataset(torch.utils.data.Dataset):
                 if len(lines) < n_lines:
                     raise RuntimeError(f"{n_lines}줄 못 채움 (커버 어절 부족)")
                 pg = render_page(fp, lines, self.std_font, self.page_w, line_h, rng, self.aug,
-                                 pitch=pitch, bgs=self.bgs)
+                                 pitch=pitch)
                 if len(pg["chars"]) == 0:
                     raise RuntimeError("빈 페이지")
                 return pg, rng, wi
