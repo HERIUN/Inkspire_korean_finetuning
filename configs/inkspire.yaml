@@ -37,7 +37,9 @@ paths:
   korean_fonts_dir: assets/fonts/train
 
 data:
-  P: 512                             # 패치 크기 (논문 1024). 1024 는 B=2 ≈ 50GB
+  P: 512                             # 패치 크기 (논문 1024). 실측 2026-09-15, batch 4 기준:
+                                     #   512 → 30.5GB / 5.0 s·step,  1024 → 45.4GB / 20.0 s·step
+                                     #   VRAM 은 1024 도 여유(H100 95GB). 4배 느린 게 유일한 제약
   page_w: 1024
   std_font: assets/fonts/label/NanumGothic-Regular.ttf   # Xc(콘텐츠 이미지) 표준폰트. 스타일 풀에서는 exclude_fonts 로 제외
   mask_mode: rand                    # rand = R-Mask (논문) | top = 행 ≥ P/8 마스크(F-TopMask)
