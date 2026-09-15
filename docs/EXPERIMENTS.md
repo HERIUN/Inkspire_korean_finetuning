@@ -3,6 +3,7 @@
 > `Eruku_korean_finetuning/docs/EXPERIMENTS.md` §12 를 그대로 옮겼다(2026-09-15).
 > 절 번호(§12)는 원본 문서의 것이고, 본문의 상대경로는 그 repo 기준이다 —
 > `finetune_runs/inkspire_*` 는 이 repo 로 옮겨왔고 `assets`/`data`/`model_zoo` 는 심링크다.
+> **`./eval.sh cer` 는 이 repo 에 없다** — CER 측정 경로는 원본 repo 에만 있다. 아래 수치는 거기서 잰 것이다.
 
 ## 12. InkSpire(FLUX-Fill LoRA + 레이아웃 CFM) 한글 재현 (2026-09)
 
