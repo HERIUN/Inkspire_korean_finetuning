@@ -42,7 +42,7 @@ PATH_KEYS = frozenset({
     "corpus_korean", "corpus_english",
     "lines_json", "resume", "ocr_checkpoint",
     # eval / infer
-    "fonts_dir", "fonts_dir_ko", "fonts_dir_en", "htr_checkpoint", "style_image", "out",
+    "fonts_dir", "fonts_dir_ko", "fonts_dir_en", "style_image", "out",
     # inkspire
     "empty_cache", "lora_dir", "layout_ckpt", "std_font",
     # eruku_pretrained / vae_checkpoint 는 제외 — HF repo id 도 받으므로 경로로 펴면 안 된다
@@ -107,7 +107,7 @@ def parse_args(parser: argparse.ArgumentParser, argv=None, default_config=None, 
     """config 를 반영해 파싱한다. `args.sampler` / `args.config_path` 가 붙는다.
 
     scopes: eval/infer 처럼 한 config 를 여러 스크립트가 나눠 쓸 때 읽을 섹션들
-            (예: ("common", "cer")). None 이면 전 섹션.
+            (예: ("common", "gen_compare")). None 이면 전 섹션.
     """
     pre = argparse.ArgumentParser(add_help=False)
     pre.add_argument("--config", default=default_config)

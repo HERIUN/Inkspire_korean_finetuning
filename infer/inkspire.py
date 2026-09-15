@@ -10,7 +10,7 @@ models.inkspire.generate → 줄별 크롭. 줄 배치(bbox)는 레이아웃 모
 ★ 레퍼런스 레이아웃은 근사다 — 표준폰트로 style_text 를 렌더한 bbox 를 x 방향만 ref 폭에 맞춘다.
   style_text=="" 면 ref 토큰 없음(레이아웃 모델의 무레퍼런스 모드).
 
-eval/htr_cer.py · experiments/gen_compare.py 는 infer/show.py 의 디스패치(`--ckpt inkspire:<lora_dir>[,<layout_ckpt>]`)로
+experiments/gen_compare.py (와 원본 repo 의 eval/htr_cer.py) 는 infer/show.py 의 디스패치(`--ckpt inkspire:<lora_dir>[,<layout_ckpt>]`)로
 이 클래스를 쓴다(`gen(style_arr, style_text, target_text, seed)`).
 
 사용 (configs/infer.yaml 의 inkspire: 섹션):

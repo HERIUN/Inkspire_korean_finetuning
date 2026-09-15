@@ -1,6 +1,5 @@
-# InkSpire 평가 설정 — eval/htr_cer.py · experiments/gen_compare.py
+# InkSpire 평가 설정 — experiments/gen_compare.py
 #
-# 원본 repo 의 configs/eval.yaml 에서 common + htr_cer 섹션만 가져왔다.
 # 각 스크립트는 common + 자기 섹션을 읽고, 뒤 섹션이 common 을 덮는다.
 
 common:
@@ -13,18 +12,6 @@ common:
   max_words: 15          # 평가 텍스트 어절수 상한
   seed: 0
   english: false         # true 면 영어 텍스트/라틴 폰트로 평가
-  coherent: false        # 실제 문장 세그먼트로 평가할지. **권장은 true** — 랜덤 단어 나열보다
-                         # OCR 신뢰성이 높다(docs/EXPERIMENTS.md 수치는 전부 coherent 기준).
-                         # 기존 측정과의 비교 가능성 때문에 기본값은 false 로 둔다.
-                         # 부울은 --coherent / --no-coherent 로 CLI 에서 양방향 조절 가능.
   no_style_text: false   # style 텍스트를 비우고 이미지만 조건으로 (p_drop 학습 확인용)
   fonts_dir: assets/fonts_korean_v2/train   # 평가용 폰트. held-out 은 fonts_korean_v2/test
   device: cuda
-
-htr_cer:                 # eval/htr_cer.py — 한글 HTR 리더 CER ← 한글 주 지표
-  vae_checkpoint: null
-  style_ref_text: null   # style ref 텍스트(one-shot). null = echo(style = 목표 텍스트 렌더). InkSpire 비교 시
-                         #   "다람쥐 헌 쳇바퀴에 타고파" 로도 측정 (docs/EXPERIMENTS.md §12)
-  htr_checkpoint: finetune_runs/aux_htr_ko/htr_s20000
-  out: finetune_runs/htr_cer.txt
-

@@ -9,7 +9,6 @@ from __future__ import annotations
 from pathlib import Path
 import numpy as np, cv2, torch
 from PIL import Image, ImageDraw, ImageFont
-from torchvision import transforms as T
 
 DEFAULT_MAX_IMG_LEN = 8192   # Eruku 호환 인자(InkSpire 는 무시)
 
@@ -83,7 +82,8 @@ def style_tensor(arr, h=64):
     img = Image.fromarray(arr).convert("RGB")
     w, hh = img.size
     img = img.resize((max(1, int(w * (h / hh))), h), Image.BILINEAR)
-    return T.Compose([T.ToTensor(), T.Normalize((0.5,) * 3, (0.5,) * 3)])(img)
+    t = torch.from_numpy(np.asarray(img, np.float32) / 255.0).permute(2, 0, 1)
+    return t * 2 - 1        # ToTensor + Normalize(0.5, 0.5) — torchvision 한 줄 쓰자고 2GB 안 받는다
 
 
 def load_model(ckpt, device, vae_checkpoint=None):

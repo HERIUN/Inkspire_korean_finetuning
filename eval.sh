@@ -1,17 +1,10 @@
 #!/usr/bin/env bash
 # InkSpire 평가 진입점.
 #
-#   ./eval.sh cer [args...]          한글 HTR 리더 CER ← 주 지표 (eval/htr_cer.py)
 #   ./eval.sh exp [이름] [args...]   experiments/ 스크립트 (인자 없으면 목록)
 #
 # ★ --ckpt 는 `inkspire:<lora_dir>[,<layout_ckpt>][,key=value…]` 형식이다.
 #   key=value 로 steps · guidance · std_font · trim_ref · degrade 스윕.
-#   Eruku 체크포인트는 이 repo 에서 못 돌린다 — 원본 Eruku_korean_finetuning 에서
-#   같은 프로토콜(--n 300 --coherent --binarize 200 --seed 0)로 따로 재고 숫자를 비교한다.
-#
-#   ./eval.sh cer --ckpt inkspire:finetune_runs/inkspire_p512/lora_last \
-#       --fonts-dir assets/fonts_korean_v2/test --n 300 --coherent --binarize 200 --seed 0 \
-#       --style-ref-text "다람쥐 헌 쳇바퀴에 타고파"
 #
 # 환경변수:  GPU=2 (기본 0) · DRY=1 (커맨드만 출력) · PY=... (기본 ./.venv/bin/python)
 set -euo pipefail
@@ -33,7 +26,6 @@ exp_run() {
 }
 cmd="${1:-}"; shift || true
 case "$cmd" in
-  cer) run "$PY" eval/htr_cer.py "$@" ;;
   exp) exp_run "$@" ;;
   ""|-h|--help|help) usage ;;
   *) echo "알 수 없는 명령: $cmd" >&2; echo >&2; usage >&2; exit 1 ;;

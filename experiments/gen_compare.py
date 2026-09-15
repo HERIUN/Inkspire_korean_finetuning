@@ -22,10 +22,9 @@ from pathlib import Path
 import numpy as np, torch
 from PIL import Image
 
-from common import REPO, header_row, fit_row
+from common import REPO, header_row, fit_row, font_can_render
 from infer.show import (load_model, render_in_font, style_tensor, gen_from_style,
                         cell, label_img, FONTS_DIR)
-from eval.echo_metrics import font_can_render
 
 # 복잡획(겹받침·쌍자음·밀집) 단문 집중 + 일반 단문/장문 대조군.
 # style ref 로 렌더할 기본 텍스트 — 타깃과 같은 스크립트여야 한다.
