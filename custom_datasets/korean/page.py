@@ -69,18 +69,24 @@ def _adv(font, s: str) -> float:
     return sum(font.getlength(c) for c in s)
 
 
-def wrap_lines(words: list[str], font, max_w: float, n_lines: int) -> list[str]:
-    """어절 greedy wrap. max_w 를 혼자 넘는 어절은 버린다. n_lines 를 채우면 멈춘다."""
+def wrap_lines(words: list[str], font, max_w, n_lines: int) -> list[str]:
+    """어절 greedy wrap. max_w 를 혼자 넘는 어절은 버린다. n_lines 를 채우면 멈춘다.
+    max_w 는 상수 또는 줄 번호 → 폭 함수(ragged 페이지: 줄마다 다른 폭)."""
     lines, cur = [], []
     sp = font.getlength(" ")
+    lim = max_w if callable(max_w) else (lambda i: max_w)
+    cur_w = lim(0)
     for w in words:
         if len(lines) >= n_lines:
             break
         ww = _adv(font, w)
-        if ww > max_w:
+        if ww > cur_w:
             continue
-        if cur and _adv(font, " ".join(cur)) + sp + ww > max_w:
+        if cur and _adv(font, " ".join(cur)) + sp + ww > cur_w:
             lines.append(" ".join(cur)); cur = []
+            cur_w = lim(len(lines))
+            if ww > cur_w:   # 새 줄 폭보다 긴 어절은 버린다(위 규칙과 같음)
+                continue
         cur.append(w)
     if cur and len(lines) < n_lines:
         lines.append(" ".join(cur))
@@ -328,14 +334,16 @@ class KoreanPageDataset(torch.utils.data.Dataset):
 
     ★ 결정성: __getitem__ 마다 rng = Random(seed·1e6 + idx) 이고 gen 샘플러의 rng 도 이걸로 바꿔
       DataLoader 워커가 같은 샘플러 상태를 복제해도 샘플이 겹치지 않는다.
-    ★ 페이지는 n_lines = ceil(P/pitch)+U(0,3), page_w = max(page_w, P) 라 항상 P×P 크롭이 가능하다."""
+    ★ 페이지는 n_lines = ceil(P/pitch)+U(0,3), page_w = max(page_w, P) 라 항상 P×P 크롭이 가능하다.
+    ★ ragged: 페이지를 이 확률로 "줄마다 폭 U(0.15,1)" 로 만들고 크롭 x0=0 (빈 종이 패치 방지).
+      추론 캔버스(짧은 줄 + 오른쪽 여백)를 학습 분포에 넣는다. 0 이면 rng 소비까지 기존과 동일."""
 
     def __init__(self, P: int = 512, page_w: int = 1024, mode: str = "rand", length: int = 100_000,
                  seed: int = 42, fonts_dir=None, sampler_cfg=None, paths=None, exclude_fonts=None,
-                 aug: bool = True, std_font=STD_FONT):
+                 aug: bool = True, std_font=STD_FONT, ragged: float = 0.0):
         assert mode in ("rand", "top", "line"), mode
         self.P, self.page_w, self.mode, self.length = P, max(page_w, P), mode, length
-        self.seed, self.aug, self.std_font = seed, aug, std_font
+        self.seed, self.aug, self.std_font, self.ragged = seed, aug, std_font, ragged
         fonts_dir = Path(fonts_dir or DEFAULT_FONTS_DIR)
         exc = EXCLUDE_FONTS if exclude_fonts is None else exclude_fonts
         split.ensure_font_charsets(fonts_dir)
@@ -363,10 +371,17 @@ class KoreanPageDataset(torch.utils.data.Dataset):
                 font = _font(str(fp), font_px(fp, line_h))
                 cov = set(self.charsets.get(fp.name, ""))
                 words, lines = [], []
+                full = self.page_w - 48                                          # 48 = left 최대 32 + 여유
+                ragged = self.ragged > 0 and rng.random() < self.ragged          # 0 이면 rng 를 안 건드린다
+                if ragged:
+                    widths = [full * rng.uniform(0.15, 1.0) for _ in range(n_lines)]
+                    max_w = lambda i: widths[min(i, n_lines - 1)]
+                else:
+                    max_w = full
                 for _ in range(40):
                     ws = self.gen().split()
                     words += [w for w in ws if all(c in cov for c in w)] if cov else ws
-                    lines = wrap_lines(words, font, self.page_w - 48, n_lines)   # 48 = left 최대 32 + 여유
+                    lines = wrap_lines(words, font, max_w, n_lines)
                     if len(lines) >= n_lines:
                         break
                 if len(lines) < n_lines:
@@ -375,6 +390,7 @@ class KoreanPageDataset(torch.utils.data.Dataset):
                                  pitch=pitch)
                 if len(pg["chars"]) == 0:
                     raise RuntimeError("빈 페이지")
+                pg["ragged"] = ragged
                 return pg, rng, wi
             except Exception as e:
                 print(f"[page] {fp.name}: {e} → 재추첨")
@@ -389,6 +405,8 @@ class KoreanPageDataset(torch.utils.data.Dataset):
             mask = line_mask(P, min(y_cut, P - GRID))
         else:
             y0, x0 = rng.randint(0, H - P), rng.randint(0, W - P)
+            if pg["ragged"]:
+                x0 = 0
             mask = rmask(P, rng) if self.mode == "rand" else line_mask(P, P // 8)
         crop = lambda a: a[y0:y0 + P, x0:x0 + P]
         return {"x": _to_tensor(crop(pg["x"])), "xc": _to_tensor(crop(pg["xc"])),
@@ -488,6 +506,14 @@ def _selfcheck(out: Path, n: int):
         assert torch.equal(b["char_ids"][i, :n_], it["char_ids"]) and (it["char_ids"] > 0).all()
         assert torch.equal(b["ref_mask"][i, :n_], it["line_id"] == 0) and b["ref_mask"][i].any()
     print(f"vocab {len(vocab())} | collate {tuple(b['char_ids'].shape)} ok")
+    # ragged=1: 줄 오른쪽 끝이 들쭉날쭉(최장-최단 ≥ 페이지 폭 1/4)하고 패치는 좌측 여백부터 잉크를 담는다
+    rg = KoreanPageDataset(P=P, mode="rand", length=1000, seed=7, ragged=1.0)
+    for i in range(n):
+        pg, _, _ = rg._page(i)
+        ends = [pg["bboxes"][pg["line_id"] == l, 2].max() for l in np.unique(pg["line_id"])]
+        assert pg["ragged"] and max(ends) - min(ends) >= pg["page_w"] / 4, ends
+        assert (rg[i]["x"][0, :, :64] < 0).any(), "ragged 패치 좌측 64px 에 잉크 없음(x0=0 크롭 아님)"
+    print(f"ragged ×{n} ok")
     print(f"__getitem__ {np.mean(times) * 1000:.0f} ms avg / {np.max(times) * 1000:.0f} ms max ({len(times)} calls)")
     print(f"self-check OK → {out}")
 

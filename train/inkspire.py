@@ -75,6 +75,7 @@ def make_parser():
     p.add_argument("--mask-mode", choices=["rand", "top"], default="rand")
     p.add_argument("--exclude-fonts", nargs="*", default=None)
     p.add_argument("--aug", action=B, default=True)
+    p.add_argument("--ragged", type=float, default=0.0, help="짧은 줄+오른쪽 여백 페이지 비율(학습셋만, val 은 기존 그대로)")
     p.add_argument("--val-every", type=int, default=500, help="0=off")
     p.add_argument("--val-batches", type=int, default=2)
     p.add_argument("--val-seed", type=int, default=1234)
@@ -106,7 +107,7 @@ def main():
     kw = dict(P=args.P, page_w=args.page_w, sampler_cfg=args.sampler, paths=data_paths_of(args),
               exclude_fonts=args.exclude_fonts, aug=args.aug, std_font=args.std_font)
     ds = KoreanPageDataset(mode=args.mask_mode, length=(args.max_steps - start_step) * args.batch_size * args.grad_accum,
-                           seed=args.seed + start_step, fonts_dir=args.korean_fonts_dir, **kw)
+                           seed=args.seed + start_step, fonts_dir=args.korean_fonts_dir, ragged=args.ragged, **kw)
     loader = DataLoader(ds, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers,
                         drop_last=True, pin_memory=True, persistent_workers=args.num_workers > 0)
     print(f"train fonts {len(ds.fonts)}  P={args.P} mask={args.mask_mode}")

@@ -71,10 +71,12 @@ def _ink_box(arr, th=250):
 
 class InkSpireGen:
     def __init__(self, lora_dir=None, layout_ckpt=None, device="cuda", steps=20, guidance=30.0,
-                 rape=True, ape=True, std_font=STD_FONT, trim_ref=True, degrade=0.0):
-        """lora_dir=None 이면 FLUX 를 안 올린다(prepare/--dry-run 전용). layout_ckpt=None → std layout."""
+                 rape=True, ape=True, std_font=STD_FONT, trim_ref=True, degrade=0.0, tight_mask=False):
+        """lora_dir=None 이면 FLUX 를 안 올린다(prepare/--dry-run 전용). layout_ckpt=None → std layout.
+        tight_mask: 마스크 = [ref 잉크 바닥 ↑16격자, 목표 상자 바닥+4 ↑16격자) — 캔버스도 거기서 끝난다.
+          기본(False)은 y_cut = clip(목표 top−2, ref 바닥+1, TOP+PITCH), H = max(TOP+PITCH·(n+1), 상자 바닥+8)."""
         self.device, self.steps, self.guidance, self.rape, self.ape = device, steps, guidance, rape, ape
-        self.trim_ref, self.degrade = trim_ref, degrade
+        self.trim_ref, self.degrade, self.tight_mask = trim_ref, degrade, tight_mask
         self.std_font_path = std_font          # ★ 학습(configs/inkspire.yaml data.std_font)과 같아야 한다
         self.std_font = page._font(str(std_font), font_px(std_font, LINE_H))
         self.layout = None
@@ -141,7 +143,10 @@ class InkSpireGen:
         boxes[:, [1, 3]] = boxes[:, [1, 3]].clip(0, None)
         W = 16 * math.ceil(min(MAX_W, max(LEFT + Wr, boxes[:, 2].max() if len(boxes) else 0) + 8) / 16)
         # ★ 캔버스를 학습 페이지 폭(1024)까지 흰색으로 넓혀봤자 CER 0.19 → 0.25 로 나빠진다(2026-09-14)
-        H = 16 * math.ceil(max(TOP + PITCH * (len(lines) + 1), (boxes[:, 3].max() + 8) if len(boxes) else 0) / 16)
+        if self.tight_mask and tgt.any():   # X y끝 ~ Xc y끝. 목표 아래 빈 종이(기본 방식 ~42px)를 생성시키지 않는다
+            H = 16 * math.ceil((boxes[tgt, 3].max() + 4) / 16)
+        else:
+            H = 16 * math.ceil(max(TOP + PITCH * (len(lines) + 1), (boxes[:, 3].max() + 8) if len(boxes) else 0) / 16)
         boxes = np.round(boxes).astype(np.int32)
 
         xc = render_content(chars, boxes, self.std_font_path, H, W)
@@ -151,7 +156,11 @@ class InkSpireGen:
             from custom_datasets.korean import fontset as G
             x = cv2.GaussianBlur(x, (3, 3), 0)
             x = G.composite(x, np.full(x.shape, 255.0 - 20 * self.degrade, np.float32), 30.0, 1.0)
-        y_cut = int(np.clip(boxes[tgt, 1].min() - 2 if tgt.any() else TOP + PITCH, y_ref + ink_h + 1, TOP + PITCH))
+        if self.tight_mask:   # ref 바로 아래부터, 토큰 격자(16px)에 맞춤 — 학습 R-Mask 와 같은 규칙
+            # ponytail: 레이아웃 모델이 목표 줄을 y_cut 위로 끌어올리면 그 윗부분은 생성 못 한다(std layout 에선 안 생김)
+            y_cut = 16 * math.ceil((y_ref + ink_h + 1) / 16)
+        else:
+            y_cut = int(np.clip(boxes[tgt, 1].min() - 2 if tgt.any() else TOP + PITCH, y_ref + ink_h + 1, TOP + PITCH))
         mask = np.zeros((H, W), np.uint8); mask[y_cut:] = 1
         return {"x": x, "xc": xc, "mask": mask, "chars": chars, "boxes": boxes, "line_id": line_id,
                 "ref_w": Wr, "y_cut": y_cut}

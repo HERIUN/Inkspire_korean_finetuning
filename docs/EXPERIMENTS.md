@@ -115,6 +115,9 @@ std layout(`inkspire:<lora>`) vs `--layout-ckpt` 행의 차이로 분리한다.
 | custom_hw 4 | InkSpire s20000 + layout | echo | 0.422 | 0.333 | 2.3% | 0.209 |
 | custom_hw 4 | InkSpire s20000 + layout | style-ref | 0.384 | 0.253 | 2.3% | 0.209 |
 
+> ★ **2026-10-20 정정:** 아래 표와 결론은 자체 HTR 리더 기준이다. 독립 리더 PP-OCRv6 로 같은 표본을 다시 재면 InkSpire s13000 도
+> 중앙값 0(corpus CER 0.040 vs Eruku 0.018) — "크게 진다"는 리더 착시였다. 상세 `docs/inkspire.md` §9.6.
+
 결론: **재현은 성공했지만 Eruku 를 못 이긴다.** held-out v2/test style-ref 기준 Eruku 는 중앙값 0.000 / 폭주 0.0%,
 InkSpire 최고 체크포인트는 0.190 / 1.7% 다. 세 세트·두 프로토콜 전부 같은 방향이다. 논문이 Eruku(Emuru) 와 직접 비교한
 수치가 없으므로, "더 좋다"는 주장은 최소한 **한글 합성 폰트 조건에서는 우리 측정으로 확인되지 않는다**.
@@ -131,5 +134,10 @@ InkSpire 최고 체크포인트는 0.190 / 1.7% 다. 세 세트·두 프로토�
 후자에서 `gencmp_ko_diverse.png` 6 행 중 4 행은 Eruku 와 비슷한 품질로 스타일까지 옮기고, 나머지 2 행
 (ARCHISCULPTURE, Sam3 처럼 라틴·장식 레퍼런스)은 글자가 뭉개진다 — 폭주율 2% 대의 정체가 이것이다.
 전자는 레이아웃 모델 탓에 같은 행에서도 글자가 빠지거나 겹친다(표의 std layout 우세와 일치).
+
+**추가 (2026-10-20, `docs/inkspire.md` §9.4):** 위 두 몽타주는 ref_set 의 혼합 스크립트 줄(영문·숫자·구두점)을 ref 로 써서
+InkSpire 에 불리했다. held-out 폰트 + 한글 pangram ref 로 다시 만든 것이 `_eval_pangram/`(s13000 std layout,
+`experiments/gencmp_split.py`) — 육안으로는 Eruku 와 엇비슷하다. 또 관찰 1(레이아웃 모델 열세)은 **한 줄씩 생성하는
+이 프로토콜에서만** 성립한다: 같은 레이아웃 모델도 긴 줄 아래 3번째 줄로 쓰게 하면 반듯하다(짧은 단독 줄의 첫 글자 오차 142px 가 원인).
 
 남은 가능성(미검증): 논문 설정인 **P=1024**(우리는 512), 레이아웃 모델 20k 완주, 실손글씨 데이터.

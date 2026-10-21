@@ -45,6 +45,7 @@ data:
   mask_mode: rand                    # rand = R-Mask (논문) | top = 행 ≥ P/8 마스크(F-TopMask)
   exclude_fonts: [UlsanJunggu, NanumGothic]
   aug: true                          # 줄 회전·elastic·morph·blur·잉크농도·jitter
+  ragged: 0.0                        # 짧은 줄+오른쪽 여백 페이지 비율(크롭 x0=0). docs/inkspire.md §9.5
   sampler:
     weights:
       ko: 0.45

@@ -89,7 +89,7 @@ def style_tensor(arr, h=64):
 def load_model(ckpt, device, vae_checkpoint=None):
     """`inkspire:<lora_dir>[,<layout_ckpt>][,key=value…]` → (InkSpireGen, "inkspire").
 
-    key=value 로 steps · guidance · std_font · trim_ref · degrade 를 스윕할 수 있다.
+    key=value 로 steps · guidance · std_font · trim_ref · degrade · tight_mask 를 스윕할 수 있다.
     """
     if not str(ckpt).startswith("inkspire:"):
         raise SystemExit(f"[error] {ckpt}\n{ERUKU_HOWTO}")
@@ -103,7 +103,8 @@ def load_model(ckpt, device, vae_checkpoint=None):
                        guidance=kw.get("guidance", 30.0),
                        std_font=kw.get("std_font", STD_FONT),
                        trim_ref=bool(kw.get("trim_ref", 1)),
-                       degrade=kw.get("degrade", 0.0)), "inkspire"
+                       degrade=kw.get("degrade", 0.0),
+                       tight_mask=bool(kw.get("tight_mask", 0))), "inkspire"
 
 
 def gen_from_style(model, style_img, style_text, gen_text, cfg, max_new, device,
