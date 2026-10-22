@@ -2,13 +2,15 @@
 
 논문: *Learning to Generate Stylized Handwritten Text via a Unified Representation of Style, Content, and Noise*
 (Wang et al., ICLR 2026, OpenReview `FBPuLChGNX`, 사본 `docs/inkspire.pdf`). 코드 미공개라 논문만 보고 구현했다.
-브랜치 `inkspire` (2026-09-10~). 측정값·재현 커맨드는 [`EXPERIMENTS.md` §12](EXPERIMENTS.md#12-inkspireflux-fill-lora--레이아웃-cfm-한글-재현-2026-09),
+브랜치 `inkspire` (2026-09-10~). 측정값·재현 커맨드는 [`EXPERIMENTS.md`](EXPERIMENTS.md),
 설계 근거는 계획 파일(`~/.claude/plans/functional-inventing-lovelace.md`).
 
-★ 논문 표 2·3 은 HWT/VATr/One-DM/DiffPen/TGC-Diff 와만 비교한다. **Eruku/Emuru 와의 직접 비교 수치는 논문에 없다.**
-"Eruku 보다 좋은가"는 §12 표(같은 HTR CER 프로토콜)로만 판정한다.
+★ 논문 표 2 에 Eruku/Emuru 행은 없지만 baseline 수치가 Eruku 논문 표 3(IAM Lines)과 같아 간접 비교가 된다 —
+IAM 에선 InkSpire 가 FID 7.92 / HWD 0.62 / ΔCER 0.01 로 Eruku(16.40 / 1.70 / 0.06)를 앞선다(조건 차이 포함, EXPERIMENTS §6).
+한글 재현의 Eruku 비교는 EXPERIMENTS §4(자체 HTR)·§5(PP-OCRv6).
 ★ 2026-10-20: 그 자체 HTR 리더가 InkSpire 출력을 과하게 나쁘게 읽었다 — 독립 리더(PP-OCRv6) 재측정은 §9.6. **판정은 §9.6 을 따른다.**
 ★ 2026-10-21: **최종 결론 §10 — 한 줄 생성은 Eruku 를 주력으로, InkSpire 는 현 상태로 보류.**
+★ **Eruku 와 다른 점 — 특히 추론 때 ref 전사(style_text)가 필수라는 점은 §11.**
 
 ---
 
@@ -51,7 +53,7 @@
 | `train/inkspire.py` | 이미지 LoRA 트레이너 | `make_parser` :45 → `configs/inkspire.yaml` · `main` :91 (Prodigy/AdamW, grad-accum, clip, bf16 autocast, val = `mode=line` 고정 배치 + `generate` 그리드 PNG, `lora_step_%06d/{pytorch_lora_weights.safetensors, trainer.pt}` + `lora_last` 심링크, `--resume <lora_dir>`) |
 | `train/inkspire_layout.py` | 레이아웃 트레이너 | `make_parser` :37 → `configs/inkspire_layout.yaml` · `validate` :77 (val loss + `sample` 의 bbox L1 px) · `main` :91 (step 0 `set_norm`, AdamW, `checkpoint_step_%06d.pth`/`checkpoint_last.pth`) |
 | `infer/inkspire.py` | one-shot 생성기 + 뷰어 | `InkSpireGen` :71 — `prepare` :86 (ref 잉크 48px 로 정규화, 레퍼런스 bbox = 표준폰트 렌더를 ref 폭으로 스케일, 레이아웃 모델 `sample` 또는 std layout, 줄마다 좌측 여백 고정, 2줄+ 캔버스·Xc·마스크 구성) · `gen_lines` :153 · `gen` :166 (Eruku `gen_from_style` 과 같은 계약) · CLI `main` :177 (`--lines a b c` 다중 줄, `--dry-run` 캔버스만) |
-| `tools/fetch_flux.py` | FLUX 34GB 1회 다운로드 + 빈 프롬프트 캐시 `model_zoo/flux_fill_empty_prompt.pt` | 로그인/라이선스 미완이면 한글 안내 후 exit 1 |
+| `models/inkspire.py --cache` · `models/inkspire_klein.py --cache` | 가중치 다운로드 + 빈 프롬프트 캐시 `model_zoo/{flux_fill,klein}_empty_prompt.pt` (`EMPTY_CACHE`) | 로그인/라이선스 미완이면 모듈의 `HOWTO` 안내 후 exit 1 |
 | `configs/inkspire.yaml`, `configs/inkspire_layout.yaml` | 조절 가능한 전부(paths 4키는 `base.yaml` 상속 불가라 복제) | |
 
 ### 수정 파일
@@ -62,9 +64,9 @@
 | `configs/loader.py` :46 | `PATH_KEYS` 에 `empty_cache`, `lora_dir`, `layout_ckpt` |
 | `configs/eval.yaml`, `configs/infer.yaml` | `inkspire:` 섹션 |
 | `train/core.py` | `log_run_config` 추출(두 신규 트레이너가 import) |
-| `train.sh` / `inference.sh` / `eval.sh` | `inkspire`, `inkspire-layout`, `fetch-flux` / `inkspire` / 헤더 안내 |
+| `train.sh` / `inference.sh` / `eval.sh` | `inkspire`, `inkspire-layout`, `fetch-flux`, `fetch-klein` / `inkspire` / 헤더 안내 |
 | `pyproject.toml` | `peft>=0.18`, `prodigyopt>=1.1` |
-| `README.md`, `docs/EXPERIMENTS.md` | repo 구조 트리, §12 |
+| `README.md`, `docs/EXPERIMENTS.md` | repo 구조 트리, 실험 로그 |
 
 ### self-check (전부 통과, 2026-09-10)
 
@@ -123,7 +125,7 @@ GPU=2 ./inference.sh inkspire --dry-run --layout-ckpt <ckpt> --lines "첫 줄" "
 |---|---|
 | 이미지 LoRA `finetune_runs/inkspire_p512` | **완료** 20,000 step (val loss 0.193 → 0.168, 평균 0.27 it/s, peak 30.6GB). `lora_last` = `lora_step_020000` |
 | 레이아웃 `finetune_runs/inkspire_layout` | s8000 에서 중단(val bbox L1 11.7px). **재개할 이유가 약함** — 아래 결과에서 레이아웃 모델이 std layout 보다 나쁨 |
-| Stage 4 평가 | 3 세트 × {std layout, +layout} × {echo, style-ref} n=300 완료 → `finetune_runs/_eval/inkspire_s20000_*.txt`, 표는 EXPERIMENTS §12 |
+| Stage 4 평가 | 3 세트 × {std layout, +layout} × {echo, style-ref} n=300 완료 → `finetune_runs/_eval/inkspire_s20000_*.txt`, 표는 EXPERIMENTS §4 |
 | 판정 | **최종: §10 — 보류.** ~~**Eruku 우세.** held-out style-ref 중앙값 Eruku 0.000 / 폭주 0.0% vs InkSpire 최고(s13000) 0.190 / 1.7%~~ → **자체 HTR 착시 (§9.6).** PP-OCRv6 로는 중앙값 둘 다 0, corpus CER Eruku 0.018 vs InkSpire 0.040(tight_mask 0.034) — Eruku 가 여전히 앞서지만 격차는 숫자·기호·붓글씨류에 몰려 있다 |
 | 최적 체크포인트 | **s13000**(0.190) > s20000(0.222). val loss 는 s20000 이 최저 — 손실로 고르면 틀린다 |
 | 레이아웃 모델 기여 | **음(−)**. 6 쌍 전부 std layout 이 같거나 나음. n=40 중간 점검의 반대 결과는 표본 착시였음 |
@@ -137,7 +139,7 @@ GPU=2 ./inference.sh inkspire --dry-run --layout-ckpt <ckpt> --lines "첫 줄" "
 | 레이아웃 20k 완주 | bbox L1 이 s2000 부터 정체라 기대값 낮음. 지금은 std layout 이 더 나음 | 6h |
 | 숫자·붓글씨 보강 | 코퍼스 숫자 비중 상향, 붓글씨 폰트 가중 샘플링 | 데이터만 수정, 재학습 필요 |
 
-재현 커맨드는 `docs/EXPERIMENTS.md` §12 에 있다.
+재현 커맨드는 `docs/EXPERIMENTS.md` §2~§4 에 있다.
 
 ---
 
@@ -389,7 +391,7 @@ gencmp ko_short 6행과 같은 ref·목표·seed 0 (`docs/_gen_inkspire_wobble_a
 §9.1 의 위치별 오차(줄 안 1~3번째 글자 **142px**, 4번째부터 ~40px)와 맞는다 — 짧은 줄은 오차가 큰 첫 글자들이
 전부다. 또 단독 줄의 Δy 기준은 **근사 bbox 인 ref 줄**이지만 3번째 줄의 기준은 모델이 스스로 예측한 2번째 줄이라
 자기 일관적이다. 학습 페이지도 폭을 채운 여러 줄이라 "ref 아래 짧은 한 줄"은 분포 밖이다.
-→ EXPERIMENTS §12 의 "레이아웃 모델 6쌍 전부 열세"는 **한 줄씩 생성하는 CER 프로토콜에서의 결론**이다.
+→ EXPERIMENTS §4 의 "레이아웃 모델 6쌍 전부 열세"는 **한 줄씩 생성하는 CER 프로토콜에서의 결론**이다.
 여러 줄을 한 번에 쓰는 용도에서는 레이아웃 모델이 쓸 만할 수 있다(CER 미측정).
 
 **학습된 이미지 모델 자체는 멀쩡하다.** held-out 16폰트에서 pangram ref 면 std layout 으로도 흔들림이 없다.
@@ -402,7 +404,7 @@ std 상자가 나눔고딕 폭이기 때문이고, 스타일 폰트의 실제 bb
 
 held-out 16폰트, s13000, pangram ref (`docs/_gen_inkspire_oracle_vs_std.py`). 열: 정답 | A std layout(현재 추론) | B 스타일 폰트 실제 bbox + 학습 page 빌더(`render_page`, aug off).
 
-한계: 육안 비교(6행·16폰트), CER 은 다시 재지 않았다. 레이아웃 모델 쪽 방향은 EXPERIMENTS §12 표(6쌍 전부 std layout ≥)와 일치한다.
+한계: 육안 비교(6행·16폰트), CER 은 다시 재지 않았다. 레이아웃 모델 쪽 방향은 EXPERIMENTS §4 표(6쌍 전부 std layout ≥)와 일치한다.
 
 **권장 추론 설정:** 한 줄씩 생성이면 레이아웃 모델 끔(std layout), **s13000**, ref 는 한글 문장.
 
@@ -450,11 +452,11 @@ R-Mask 와 비교해 R-Mask 가 낫다고 보고한다(IAM ΔCER 0.07 vs 0.01) �
 자체 HTR(`aux_htr_ko/htr_s20000`)은 같은 폰트 렌더로 학습된 리더라 독립적이지 않다.
 
 **경로.** 이 repo 엔 리더가, 원본 repo 엔 InkSpire 코드가 없어 셋으로 나눴다 — 재현 커맨드는 `experiments/cer_dump.py` docstring.
-`cer_dump.py plan`(원본 repo env, `htr_cer.py` 와 같은 rng 순서 → 폰트 분포가 §12 표와 정확히 일치 확인) →
+`cer_dump.py plan`(원본 repo env, `htr_cer.py` 와 같은 rng 순서 → 폰트 분포가 EXPERIMENTS §4 표와 정확히 일치 확인) →
 `cer_dump.py gen`(여기) → `ppocr_rec.py --save-preds`(원본 repo) → `experiments/cer_analyze.py`(폰트·문자 종류·자모 위치 분해).
 Eruku 는 원본 repo `htr_cer.py --dump-dir`. 결과: `finetune_runs/_cer/*`.
 
-held-out 16폰트, style-ref pangram, coherent, n=300, seed 0 (§12 와 같은 표본):
+held-out 16폰트, style-ref pangram, coherent, n=300, seed 0 (EXPERIMENTS §4 와 같은 표본):
 
 | 조건 | 자체 HTR 중앙값 | PP corpus CER | PP 평균 / 중앙값 | 한글 | 숫자 | 기호 |
 |---|---|---|---|---|---|---|
@@ -467,7 +469,7 @@ held-out 16폰트, style-ref pangram, coherent, n=300, seed 0 (§12 와 같은 �
 | + Xc 첫 줄에 ref 의 PP-OCR 판독 (`--style-text ocr`) | — | 0.041 | 0.046 / 0 | 3.6% | 12.0% | 8.9% |
 
 1. **자체 HTR 이 InkSpire 를 과하게 깎았다.** 중앙값 0.190 → 0. 폰트별 "굵은 폰트 약점"(BagelFatOne 0.423, BlackHanSans 0.333)도
-   PP 로는 0.028 / 0.000 — 리더 착시. §12 표와 §9.1 의 HTR 기반 추론 노브 결론(줄 높이 48/64/80, guidance, trim_ref, 캔버스 폭)도
+   PP 로는 0.028 / 0.000 — 리더 착시. EXPERIMENTS §4 표와 §9.1 의 HTR 기반 추론 노브 결론(줄 높이 48/64/80, guidance, trim_ref, 캔버스 폭)도
    **PP 로 다시 재기 전까지 미확정**이다.
 2. **남은 격차는 획 정확도.** 숫자·기호가 가장 크고(−·℃ 는 표준폰트 NanumGothic 에 글리프가 없어 Xc 에 안 그려진다),
    붓·펜글씨(NanumBrushScript 0.173 / NanumPenScript 0.053, 나머지 폰트는 0). 한글 1:1 치환의 틀린 자모는 InkSpire 가 중성 31~42%
@@ -520,7 +522,62 @@ held-out 16폰트 · pangram ref · n=300 · PP-OCRv6 corpus CER 기준.
    글자 bbox 정답 주석이 주어지는 설정(IAM/ICDAR, §4.1.1·§4.3)만 다루고 전사 없는 경우는 언급이 없다.
    외부 OCR 로 메우면 수치는 회복되지만 다른 모델 의존이 생기고, 자체 해결(Xc ref-dropout 재학습)은 비용 대비
    Eruku 를 넘을 근거가 없다 — **하지 않는다.**
+   (2026-10-22 보정: 논문 IAM 수치로는 InkSpire 가 HWD 0.62 vs Eruku 1.70 으로 스타일에서 크게 앞선다 — EXPERIMENTS §6.
+   IAM 학습·주석 입력 조건이 달라 공정 비교는 아니지만, 아래 (b) 스타일 비교의 근거가 된다.)
 3. **InkSpire 를 다시 꺼낼 이유가 생긴다면 CER 이 아니라** (a) 다줄·문단 동시 생성, 글자 단위 편집처럼 Eruku 가 구조적으로
    못 하는 기능, 또는 (b) 스타일 충실도(미측정)다. 그때는 재학습보다 **스타일 비교 평가를 먼저** 한다.
 
 보류된 작업: `ragged` 학습(§9.5, 코드는 기본값 0 으로 남김), PP 기반 추론 노브 재측정, 숫자·기호 데이터 보강, Xc ref-dropout.
+
+---
+
+## 11. Eruku 와 다른 점
+
+### 11.1 한눈에
+
+| | Eruku (원본 repo) | InkSpire (이 repo) |
+|---|---|---|
+| 생성 방식 | 자기회귀 — T5-Large 인코더-디코더가 VAE latent 를 열 단위로 이어 붙인다 | 확산(rectified flow) 인페인팅 — 캔버스의 마스크 영역을 한 번에 채운다 |
+| 백본 | T5-Large + Emuru VAE | FLUX.1-Fill-dev(12B) 또는 FLUX.3-Image-Klein-Base(5.5B, `black-forest-labs/flux-3-image-klein-base`) + LoRA |
+| 스타일 입력 | ref 이미지 Is (+ 선택: ref 전사 Ts) | 캔버스 X 의 첫 줄에 ref 이미지를 그대로 둔다 |
+| 내용 입력 | 목표 텍스트 Tg (토큰) | 목표 텍스트를 **표준폰트(NanumGothic)로 그린 이미지 Xc** — 텍스트 토큰은 없다(빈 프롬프트 캐시) |
+| ref 전사 | **선택** — 학습 `style_text_dropout=0.10` | **필수** (§11.2) |
+| 글자 위치·폭 | 모델이 생성하면서 스스로 정한다(길이는 종료 토큰) | 생성 전에 정해야 한다 — 레이아웃 모델 또는 std layout(표준폰트 bbox) |
+| 출력 | 한 줄, 가변 길이 | 캔버스 전체 — 여러 줄 동시 생성, 마스크만 바꾸면 부분 편집 |
+| 한글 CER (PP-OCRv6, held-out 16폰트, 전사 있음) | **0.018** | 0.040 (EXPERIMENTS §5) |
+| 논문 IAM Lines (HWD↓) | 1.70 (zero-shot) | **0.62** (IAM 학습, 조건 다름 — EXPERIMENTS §6) |
+
+### 11.2 추론 때 ref 전사가 필수인 이유
+
+InkSpire 는 ref 줄의 **전사를 두 군데에서 쓴다.** 둘 다 대체 경로가 없다.
+
+1. **Xc 의 ref 줄을 그린다.** 학습에서 Xc 는 페이지 전체(보이는 ref 줄 포함)를 항상 표준폰트로 채웠다.
+   이미지 모델은 이 "X 의 손글씨 ↔ Xc 의 표준폰트" 짝을 **글자별 대응표**로 쓴다 — '다' 가 이 필체에서 어떻게 생겼는지를
+   그 자리에서 읽어 목표 줄의 같은/비슷한 자모에 옮긴다.
+2. **ref 레이아웃(글자 bbox)을 만든다.** `InkSpireGen.prepare`(`infer/inkspire.py:111`)가 전사를 표준폰트로 렌더하고 bbox 를
+   ref 잉크 폭에 맞춰 늘린다. 논문은 이 자리에 IAM/CASIA 의 **글자 bbox 정답 주석**을 쓴다(§4.1.1) — 전사보다 더 강한 입력이다.
+
+전사를 빼거나 바꿔 본 결과(held-out n=300, PP corpus CER, §9.6):
+
+| Xc ref 줄 | CER | 무슨 일이 생기나 |
+|---|---|---|
+| 실제 전사 | 0.040 | 정상 |
+| 빈칸 (`--style-text none`) | 0.720 | **134/300 이 백지.** "X 에 잉크, Xc 는 빈칸" 은 학습 분포 밖 |
+| 목표 텍스트로 대신 채움 | 0.355 | 대응표가 틀려 목표 글자 자리에 **ref 글자 모양이 섞인다** |
+| ref 를 PP-OCRv6 로 읽은 것 | 0.041 | 회복되지만 **외부 OCR 모델에 의존** (폰트 렌더 ref 라 OCR 에 쉬운 조건) |
+
+Eruku 는 ref 전사 Ts 를 학습 때 10% 확률로 지워서, 없어도 동작한다(있으면 CER 0.197 / 없으면 0.474, 원본 README —
+나빠지긴 하지만 붕괴하지 않는다). Eruku 논문도 Ts 가 없는 경우와 TrOCR 로 얻은 Ts∗ 를 따로 평가한다(표 1).
+**InkSpire 논문은 전사가 없는 경우를 다루지 않는다.**
+
+실사용 의미: 손글씨 사진 한 장만 받는 시나리오라면 InkSpire 는 (a) 사용자가 전사를 입력하거나 (b) OCR 을 붙여야 한다.
+자체 해결책은 이미지 모델을 "Xc ref 영역 비우기" dropout 으로 재학습하는 것인데, 하지 않기로 했다(§10).
+
+### 11.3 그 밖의 실무 차이
+
+- **길이·간격을 모델이 정하지 않는다.** Eruku 는 필체에 맞게 글자 폭과 줄 길이가 달라지지만, InkSpire std layout 은
+  표준폰트의 폭·간격을 그대로 쓴다(레이아웃 모델은 한 줄 생성에서 오히려 손해, §9.1).
+- **표준폰트에 없는 글리프는 못 쓴다.** Xc 를 NanumGothic 으로 그리므로 거기 없는 기호(−, ℃ 등)는 Xc 에 빈칸이 되고 생성도 틀린다.
+- **무겁다.** FLUX.1-Fill-dev 학습 30.6GB · 2.6 s/step(B=4). 추론은 20 ODE step × 12B transformer.
+- **라이선스.** FLUX.1-Fill-dev, FLUX.3-Image-Klein-Base 모두 게이트 repo · 비상업 라이선스다.
+

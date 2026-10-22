@@ -12,6 +12,10 @@ htr_cer.py 와 같은 rng 순서로 뽑아 plan.json 에 쓰고(plan), 생성은
       --ckpt inkspire:finetune_runs/inkspire_p512/lora_step_013000
   cd $E && .venv-paddle/bin/python eval/ppocr_rec.py $O/gt $O/gen --save-preds
 --style-text ocr 이면 gen 앞에: $I/.venv/bin/python cer_dump.py ref $O → .venv-paddle/bin/python eval/ppocr_rec.py $O/ref --save-preds
+
+ref 보강(--ctx): ref 아래에 보이는 줄 하나(ctx)를 더 깔고 목표를 생성한다. 보강 줄이 쓰인 그림은 <out>/ctx/.
+  --ctx fixed = 숫자·기호·다양한 음절 고정 문장(CTX_FIXED) / adapt = 목표 음절 중 ref 에 없는 것(등장 순, 중복 제거)
+  --ctx-src oracle = 그 폰트로 렌더한 진짜 필체 + 진짜 글자 x 상자(상한) / boot = 모델이 ref 만 보고 먼저 생성한 것(실사용, 상자는 표준폰트 근사 — 생성이 그 상자에 맞춰 그려졌으니 어긋남 없음)
 """
 import argparse
 import json
@@ -21,6 +25,14 @@ from pathlib import Path
 
 import numpy as np
 from PIL import Image
+
+CTX_FIXED = "2024년 1~3월 원로 중 57.8%는 '꿈'을 이뤘다?! (69)"   # 숫자 10종·기호·중성 오류 잦은 음절(원·로·중·는)
+
+
+def ctx_text(kind, sref, text):
+    if kind == "fixed":
+        return CTX_FIXED
+    return "".join(dict.fromkeys(c for c in text if not c.isspace() and c not in sref))
 
 
 def plan(a):
@@ -60,18 +72,40 @@ def ref(a):
 def gen(a):
     import torch
     from infer.show import gen_from_style, load_model, render_in_font, style_tensor
+    u8 = lambda t: ((t[0].numpy() + 1) * 127.5).clip(0, 255).astype(np.uint8)   # style 텐서 → gen_from_style 이 보는 배열
     out = Path(a.out)
     p = json.loads((out / "plan.json").read_text(encoding="utf-8"))
     model = load_model(a.ckpt, torch.device("cuda"))[0]
     sref, tr = p["style_ref_text"], {}
     ocr = json.loads((out / "ref/ppocr_preds.json").read_text()) if a.style_text == "ocr" else {}
-    for sub in ("gen", "gt"):
+    for sub in ("gen", "gt") + (("ctx",) if a.ctx else ()):
         (out / sub).mkdir(exist_ok=True)
     for k, r in enumerate(p["rows"]):
         name = f"{r['i']:05d}.png"
         fp = Path(r["font"])
+        seed = p["seed"] * 1_000_003 + r["i"]
+        if a.ctx:
+            ref = u8(style_tensor(render_in_font(fp, sref)))
+            ct = ctx_text(a.ctx, sref, r["text"])
+            ctx = []
+            if ct:
+                if a.ctx_src == "oracle":   # 그 폰트 렌더 + 진짜 글자 x 상자(논문의 GT 레이아웃 자리)
+                    from custom_datasets.korean.page import _font, font_px, render_line
+                    ci, _, bx = render_line(_font(str(fp), font_px(fp, 64)), ct, 64 * len(ct) + 64, 0, 8)
+                    ctx = [(ci, ct, bx[:, [0, 2]])]
+                else:
+                    ci = model.gen_lines(ref, sref, [ct], seed + 1)[0]
+                    ctx = [(ci, ct)]
+                Image.fromarray(ci).save(out / "ctx" / name)
+            g = model.gen_lines(ref, sref, [r["text"]], seed, ctx)[0]
+            Image.fromarray(g).save(out / "gen" / name)
+            Image.fromarray(render_in_font(fp, r["text"])).save(out / "gt" / name)
+            tr[name] = r["text"]
+            if (k + 1) % 50 == 0:
+                print(f"  {k + 1}/{len(p['rows'])}", flush=True)
+            continue
         g = gen_from_style(model, style_tensor(render_in_font(fp, sref)), {"ref": sref, "none": "", "target": r["text"], "ocr": ocr.get(name)}[a.style_text], r["text"], 1.0, 480,
-                           torch.device("cuda"), seed=p["seed"] * 1_000_003 + r["i"])   # htr_cer.py 와 같은 시드
+                           torch.device("cuda"), seed=seed)   # htr_cer.py 와 같은 시드
         Image.fromarray(g).save(out / "gen" / name)
         Image.fromarray(render_in_font(fp, r["text"])).save(out / "gt" / name)
         tr[name] = r["text"]
@@ -79,7 +113,7 @@ def gen(a):
             print(f"  {k + 1}/{len(p['rows'])}", flush=True)
     for sub in ("gen", "gt"):
         (out / sub / "transcriptions.json").write_text(json.dumps(tr, ensure_ascii=False), encoding="utf-8")
-    (out / "ckpt.txt").write_text(f"{a.ckpt} --style-text {a.style_text}\n")
+    (out / "ckpt.txt").write_text(f"{a.ckpt} --style-text {a.style_text}" + (f" --ctx {a.ctx} --ctx-src {a.ctx_src}" if a.ctx else "") + "\n")
     print(f"gen {len(tr)} → {out}")
 
 
@@ -95,5 +129,7 @@ if __name__ == "__main__":
     ap.add_argument("--ckpt")
     ap.add_argument("--style-text", choices=["ref", "none", "target", "ocr"], default="ref",
                     help="Xc 첫 줄에 줄 전사: ref=실제 ref 전사 / none=빈칸 / target=목표 텍스트(전사 모를 때 대용) / ocr=ref 를 PP-OCR 로 읽은 것(ref 모드+ppocr_rec 먼저)")
+    ap.add_argument("--ctx", choices=["fixed", "adapt"], default=None, help="ref 보강 줄(docstring). --style-text ref 전용")
+    ap.add_argument("--ctx-src", choices=["oracle", "boot"], default="boot")
     a = ap.parse_args()
     {"plan": plan, "ref": ref, "gen": gen}[a.mode](a)

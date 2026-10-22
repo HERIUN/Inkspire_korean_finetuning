@@ -45,22 +45,28 @@ PAGE_W = 1024      # 레이아웃 [w,h,Δx,Δy] 정규화 기준 = 학습 page_w
 MAX_W = 2048       # 캔버스 폭 상한. ★ 토큰 수는 학습(2048)보다 커질 수 있다 —
                    #   W=2048, H=176 이면 회전·연결 후 128×22 = 2816 토큰이다
 
-FLUX_HOWTO = """FLUX.1-Fill-dev 가중치/빈 프롬프트 캐시가 없습니다 (게이트 repo, 비상업 라이선스).
-  1) hf auth login            (https://huggingface.co/settings/tokens 의 read 토큰)
-  2) https://huggingface.co/black-forest-labs/FLUX.1-Fill-dev 에서 라이선스 수락
-  3) ./train.sh fetch-flux    (34GB 다운로드 + model_zoo/flux_fill_empty_prompt.pt)"""
+def backbone(name_or_lora=None):
+    """"flux1" | "klein" | LoRA 디렉토리(키 이름으로 판별) → models.inkspire 또는 models.inkspire_klein 모듈."""
+    import importlib
+    name = name_or_lora or "flux1"
+    if name not in ("flux1", "klein"):
+        from safetensors import safe_open
+        with safe_open(str(Path(name) / "pytorch_lora_weights.safetensors"), "pt") as f:
+            name = "klein" if any("mode_blocks" in k for k in f.keys()) else "flux1"
+    return importlib.import_module("models.inkspire_klein" if name == "klein" else "models.inkspire")
 
 
-def load_flux_or_exit(device="cuda", cache=None, **kw):
-    """(transformer, vae, cache). 가중치/캐시가 없으면 traceback 대신 한글 안내로 종료(train/inkspire.py 공용)."""
-    from models.inkspire import EMPTY_CACHE, REPO, load_flux
-    cache = Path(cache or EMPTY_CACHE)
+def load_flux_or_exit(device="cuda", cache=None, M=None, **kw):
+    """(transformer, vae, cache). 가중치/캐시가 없으면 traceback 대신 한글 안내로 종료(train/inkspire.py 공용).
+    M = backbone() 모듈(기본 FLUX.1-Fill)."""
+    M = M or backbone()
+    cache = Path(cache or M.EMPTY_CACHE)
     if not cache.exists():
-        raise SystemExit(f"[error] {cache} 없음.\n{FLUX_HOWTO}")
+        raise SystemExit(f"[error] {cache} 없음.\n{M.HOWTO}")
     try:
-        tr, vae = load_flux(kw.pop("repo", REPO), device, **kw)
+        tr, vae = M.load_flux(kw.pop("repo", None) or M.REPO, device, **kw)
     except OSError as e:   # 미로그인/미수락/미다운로드
-        raise SystemExit(f"[error] FLUX 로드 실패 ({str(e).splitlines()[0][:120]})\n{FLUX_HOWTO}")
+        raise SystemExit(f"[error] FLUX 로드 실패 ({str(e).splitlines()[0][:120]})\n{M.HOWTO}")
     return tr, vae, torch.load(cache)
 
 
@@ -85,34 +91,47 @@ class InkSpireGen:
             self.layout = load_layout(layout_ckpt, device)[0]
         self.tr = self.vae = self.cache = None
         if lora_dir:
-            self.tr, self.vae, self.cache = load_flux_or_exit(device, lora_ckpt=lora_dir, grad_ckpt=False)
+            self.M = backbone(lora_dir)
+            self.tr, self.vae, self.cache = load_flux_or_exit(device, M=self.M, lora_ckpt=lora_dir, grad_ckpt=False)
             self.tr.eval()
 
-    def prepare(self, style_arr, style_text, lines, seed=0) -> dict:
-        """캔버스 구성(FLUX 불필요). → {x, xc, mask u8[H,W], chars, boxes int32[N,4], line_id}."""
+    def prepare(self, style_arr, style_text, lines, seed=0, ctx=()) -> dict:
+        """캔버스 구성(FLUX 불필요). → {x, xc, mask u8[H,W], chars, boxes int32[N,4], line_id}.
+        ctx: ref 아래에 보이는 줄로 더 깔 [(u8 줄 이미지, 전사[, 글자 x 상자 [N,2]]), …] — 목표 줄은 그만큼 아래로 밀린다.
+          x 상자(이미지 좌표, 공백 포함 render_line 순서)를 주면 표준폰트 근사 대신 그 위치를 쓴다 — 진짜 필체 줄은
+          글자 폭이 표준폰트와 달라 근사하면 X↔Xc 짝이 어긋난다(숫자·기호 많은 줄은 10% 가 반 글자 이상).
+          보이는 줄은 전부 line_id 0. 레이아웃 모델의 Δy 규약과 안 맞아 std layout 전용."""
+        assert not (ctx and self.layout is not None), "ctx 는 std layout 전용"
         b = self.std_font.getbbox("한글")
         ink_h, y_ref = b[3] - b[1], TOP + b[1]                       # 표준폰트 '한글' 잉크 행
-        ib = _ink_box(style_arr)
-        ref = style_arr[ib[1]:ib[3], ib[0]:ib[2]] if ib else style_arr
-        Wr = max(16, int(round(ref.shape[1] * ink_h / ref.shape[0])))
-        ref = cv2.resize(ref, (Wr, ink_h), interpolation=cv2.INTER_AREA)
 
-        chars, boxes, line_id = [], [], []
-        # 레퍼런스 레이아웃(근사): 표준폰트 bbox 를 x 방향으로 ref 폭에 맞춤.
-        # ★ 이미지에서 글자를 직접 분할해 실제 bbox 를 주는 방식도 해봤으나 CER 0.20 → 0.61 로 폭망(2026-09-14).
-        #   레이아웃 모델이 레퍼런스 토큰의 분산을 그대로 증폭한다 — 매끈한 근사값이 오히려 낫다.
-        if style_text:
-            _, ch, bx = render_line(self.std_font, style_text, 4 * MAX_W, TOP, LEFT)
-            if len(bx):
-                bx = bx.astype(np.float32)
-                x0, x1 = bx[:, 0].min(), bx[:, 2].max()
-                bx[:, [0, 2]] = LEFT + (bx[:, [0, 2]] - x0) * Wr / max(1.0, x1 - x0)
-                chars += ch; boxes.append(bx); line_id += [0] * len(ch)
+        vis, chars, boxes, line_id, row = [], [], [], [], []
+        for r, (arr, text, *xb) in enumerate([(style_arr, style_text), *ctx]):   # 보이는 줄 r = ref(0), ctx(1..k)
+            ib = _ink_box(arr)
+            im = arr[ib[1]:ib[3], ib[0]:ib[2]] if ib else arr
+            w = max(16, int(round(im.shape[1] * ink_h / im.shape[0])))
+            vis.append(cv2.resize(im, (w, ink_h), interpolation=cv2.INTER_AREA))
+            # 레퍼런스 레이아웃(근사): 표준폰트 bbox 를 x 방향으로 ref 폭에 맞춤.
+            # ★ 이미지에서 글자를 직접 분할해 실제 bbox 를 주는 방식도 해봤으나 CER 0.20 → 0.61 로 폭망(2026-09-14).
+            #   레이아웃 모델이 레퍼런스 토큰의 분산을 그대로 증폭한다 — 매끈한 근사값이 오히려 낫다.
+            if text:
+                _, ch, bx = render_line(self.std_font, text, 4 * MAX_W, TOP + r * PITCH, LEFT)
+                if len(bx):
+                    bx = bx.astype(np.float32)
+                    x0, x1 = bx[:, 0].min(), bx[:, 2].max()
+                    if xb:   # 이미지 좌표 → 잉크 크롭·리사이즈와 같은 변환
+                        assert len(xb[0]) == len(ch), (len(xb[0]), len(ch))
+                        x0 = ib[0] if ib else 0
+                        bx[:, [0, 2]] = LEFT + (np.asarray(xb[0], np.float32) - x0) * w / im.shape[1]
+                    else:
+                        bx[:, [0, 2]] = LEFT + (bx[:, [0, 2]] - x0) * w / max(1.0, x1 - x0)
+                    chars += ch; boxes.append(bx); line_id += [0] * len(ch); row += [r] * len(ch)
+        k = len(vis) - 1
         for i, text in enumerate(lines):   # 타깃 토큰: std layout 을 초기값/기본값으로
-            _, ch, bx = render_line(self.std_font, text, 4 * MAX_W, TOP + (i + 1) * PITCH, LEFT)
-            chars += ch; boxes.append(bx.astype(np.float32)); line_id += [i + 1] * len(ch)
+            _, ch, bx = render_line(self.std_font, text, 4 * MAX_W, TOP + (i + 1 + k) * PITCH, LEFT)
+            chars += ch; boxes.append(bx.astype(np.float32)); line_id += [i + 1] * len(ch); row += [-1] * len(ch)
         boxes = np.concatenate(boxes, 0) if boxes else np.zeros((0, 4), np.float32)
-        line_id = np.array(line_id, dtype=np.int64)
+        line_id, row = np.array(line_id, dtype=np.int64), np.array(row, dtype=np.int64)
         if self.layout is not None and len(chars):
             from models.inkspire_layout import sample
             ref_mask = torch.from_numpy(line_id == 0)[None]
@@ -134,36 +153,43 @@ class InkSpireGen:
         #   실측 2026-09-14 (held-out n=150): CER 중앙값 0.191 → 0.170, 폭주율 1.3% → 0.7%.
         if self.trim_ref and tgt.any():
             keep_w = int(boxes[tgt, 2].max() + 8 - LEFT)
-            if 16 <= keep_w < Wr:
-                ref, Wr = ref[:, :keep_w], keep_w
-                keep = tgt | (boxes[:, 2] <= LEFT + Wr)
-                chars = [c for c, k in zip(chars, keep) if k]
-                boxes, line_id, tgt = boxes[keep], line_id[keep], tgt[keep]
+            keep = tgt.copy()
+            for r, im in enumerate(vis):   # ctx 줄도 같은 폭으로 자른다(캔버스 폭 = 목표 줄 폭 유지)
+                if 16 <= keep_w < im.shape[1]:
+                    vis[r] = im[:, :keep_w]
+                keep |= (row == r) & (boxes[:, 2] <= LEFT + vis[r].shape[1])
+            chars = [c for c, kk in zip(chars, keep) if kk]
+            boxes, line_id, tgt = boxes[keep], line_id[keep], tgt[keep]
+        Wr = vis[0].shape[1]
         boxes[:, [0, 2]] = boxes[:, [0, 2]].clip(0, MAX_W)
         boxes[:, [1, 3]] = boxes[:, [1, 3]].clip(0, None)
-        W = 16 * math.ceil(min(MAX_W, max(LEFT + Wr, boxes[:, 2].max() if len(boxes) else 0) + 8) / 16)
+        W = 16 * math.ceil(min(MAX_W, max(LEFT + max(v.shape[1] for v in vis), boxes[:, 2].max() if len(boxes) else 0) + 8) / 16)
         # ★ 캔버스를 학습 페이지 폭(1024)까지 흰색으로 넓혀봤자 CER 0.19 → 0.25 로 나빠진다(2026-09-14)
         if self.tight_mask and tgt.any():   # X y끝 ~ Xc y끝. 목표 아래 빈 종이(기본 방식 ~42px)를 생성시키지 않는다
             H = 16 * math.ceil((boxes[tgt, 3].max() + 4) / 16)
         else:
-            H = 16 * math.ceil(max(TOP + PITCH * (len(lines) + 1), (boxes[:, 3].max() + 8) if len(boxes) else 0) / 16)
+            H = 16 * math.ceil(max(TOP + PITCH * (len(lines) + 1 + k), (boxes[:, 3].max() + 8) if len(boxes) else 0) / 16)
         boxes = np.round(boxes).astype(np.int32)
 
         xc = render_content(chars, boxes, self.std_font_path, H, W)
         x = np.full((H, W), 255, np.uint8)
-        x[y_ref:y_ref + ink_h, LEFT:LEFT + Wr] = np.minimum(x[y_ref:y_ref + ink_h, LEFT:LEFT + Wr], ref[:, :W - LEFT])
+        for r, v in enumerate(vis):
+            y, w = y_ref + r * PITCH, min(v.shape[1], W - LEFT)
+            x[y:y + ink_h, LEFT:LEFT + w] = np.minimum(x[y:y + ink_h, LEFT:LEFT + w], v[:, :w])
+        y_last = y_ref + k * PITCH                                     # 마지막 보이는 줄의 잉크 top
         if self.degrade > 0:   # 학습 통계(블러·회색 종이)에 맞춰 캔버스를 일부러 더럽힌다 — 증강 불일치 검증용
             from custom_datasets.korean import fontset as G
             x = cv2.GaussianBlur(x, (3, 3), 0)
             x = G.composite(x, np.full(x.shape, 255.0 - 20 * self.degrade, np.float32), 30.0, 1.0)
         if self.tight_mask:   # ref 바로 아래부터, 토큰 격자(16px)에 맞춤 — 학습 R-Mask 와 같은 규칙
             # ponytail: 레이아웃 모델이 목표 줄을 y_cut 위로 끌어올리면 그 윗부분은 생성 못 한다(std layout 에선 안 생김)
-            y_cut = 16 * math.ceil((y_ref + ink_h + 1) / 16)
+            y_cut = 16 * math.ceil((y_last + ink_h + 1) / 16)
         else:
-            y_cut = int(np.clip(boxes[tgt, 1].min() - 2 if tgt.any() else TOP + PITCH, y_ref + ink_h + 1, TOP + PITCH))
+            y_cut = int(np.clip(boxes[tgt, 1].min() - 2 if tgt.any() else TOP + (k + 1) * PITCH,
+                                y_last + ink_h + 1, TOP + (k + 1) * PITCH))
         mask = np.zeros((H, W), np.uint8); mask[y_cut:] = 1
         return {"x": x, "xc": xc, "mask": mask, "chars": chars, "boxes": boxes, "line_id": line_id,
-                "ref_w": Wr, "y_cut": y_cut}
+                "ref_w": Wr, "y_cut": y_cut, "k": k}
 
     def _crop_line(self, out, c, i):
         """줄 i(line_id=i+1) 의 bbox 행 범위(+4px) 크롭 → 잉크 bbox 로 좌우 트림(+4px)."""
@@ -171,7 +197,7 @@ class InkSpireGen:
         if sel.any():
             y0, y1 = int(c["boxes"][sel, 1].min()), int(c["boxes"][sel, 3].max())
         else:
-            y0, y1 = TOP + (i + 1) * PITCH, TOP + (i + 2) * PITCH
+            y0, y1 = TOP + (i + 1 + c["k"]) * PITCH, TOP + (i + 2 + c["k"]) * PITCH
         y0, y1 = max(0, y0 - 4), min(out.shape[0], y1 + 4)
         strip = out[y0:y1]
         ib = _ink_box(strip)
@@ -180,15 +206,14 @@ class InkSpireGen:
         return strip
 
     @torch.no_grad()
-    def gen_lines(self, style_arr, style_text, lines, seed=0) -> list[np.ndarray]:
-        """style_arr u8[H,W](ink~0) 한 줄 + 그 전사 → lines 각각의 생성 이미지 u8 리스트."""
-        from models.inkspire import generate
+    def gen_lines(self, style_arr, style_text, lines, seed=0, ctx=()) -> list[np.ndarray]:
+        """style_arr u8[H,W](ink~0) 한 줄 + 그 전사 → lines 각각의 생성 이미지 u8 리스트. ctx 는 prepare 참고."""
         assert self.tr is not None, "FLUX 미로드(lora_dir=None) — prepare/--dry-run 만 가능"
-        c = self.prepare(style_arr, style_text, lines, seed)
+        c = self.prepare(style_arr, style_text, lines, seed, ctx)
         dev = self.device
         t = lambda a: torch.from_numpy(a.astype(np.float32) / 127.5 - 1.0)[None, None].to(dev)
         m = torch.from_numpy(c["mask"].astype(np.float32))[None, None].to(dev)
-        x_hat = generate(self.tr, self.vae, t(c["x"]), t(c["xc"]), m, self.cache, steps=self.steps,
+        x_hat = self.M.generate(self.tr, self.vae, t(c["x"]), t(c["xc"]), m, self.cache, steps=self.steps,
                          guidance=self.guidance, seed=seed, rape=self.rape, ape=self.ape)
         out = ((x_hat[0, 0].cpu().numpy() + 1) * 127.5).clip(0, 255).astype(np.uint8)
         return [self._crop_line(out, c, i) for i in range(len(lines))]

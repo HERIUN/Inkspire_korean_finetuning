@@ -4,7 +4,8 @@
 #   ./train.sh inkspire        [args]  이미지 모델: FLUX.1-Fill LoRA (configs/inkspire.yaml)
 #   ./train.sh inkspire-layout [args]  레이아웃 모델: masked CFM (configs/inkspire_layout.yaml)
 #   ./train.sh fetch-flux              FLUX.1-Fill-dev 34GB + 빈 프롬프트 캐시
-#                                      (hf auth login + 라이선스 수락 선행)
+#   ./train.sh fetch-klein             FLUX.3-Image-Klein-Base 빈 프롬프트 캐시 (--backbone klein 용)
+#                                      (둘 다 hf auth login + 모델 페이지 라이선스 수락 선행)
 #
 # 환경변수:  GPU=2 (기본 0) · DRY=1 (커맨드만 출력) · PY=... (기본 ./.venv/bin/python)
 set -euo pipefail
@@ -16,6 +17,7 @@ cmd="${1:-}"; shift || true
 case "$cmd" in
   inkspire)        run "$PY" train/inkspire.py "$@" ;;
   inkspire-layout) run "$PY" train/inkspire_layout.py "$@" ;;
-  fetch-flux)      run "$PY" tools/fetch_flux.py "$@" ;;
+  fetch-flux)      run "$PY" models/inkspire.py --cache "$@" ;;
+  fetch-klein)     run "$PY" models/inkspire_klein.py --cache "$@" ;;
   *) awk 'NR>1 && /^#/ {sub(/^# ?/, ""); print; next} NR>1 {exit}' "$0"; exit 1 ;;
 esac

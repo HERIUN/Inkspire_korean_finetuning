@@ -1,7 +1,7 @@
 """InkSpire(ICLR 2026, Wang et al.) 이미지 모델 — FLUX.1-Fill-dev + LoRA, 순수 시각 조건 인페인팅.
 
 p(X | Xs, Xc): 스타일 레퍼런스 X(마스크 밖)와 표준폰트 콘텐츠 Xc 를 공간 연결한 캔버스를 FLUX-Fill 로 채운다.
-텍스트 인코더는 쓰지 않는다 — 빈 프롬프트("") 임베딩을 `tools/fetch_flux.py` 가 1회 캐시(`EMPTY_CACHE`)하고
+텍스트 인코더는 쓰지 않는다 — 빈 프롬프트("") 임베딩을 `--cache` 가 1회 캐시(`EMPTY_CACHE`)하고
 학습·추론은 그 dict 만 읽는다(T5-XXL/CLIP 미탑재). 0 을 넣지 않는 이유: context_embedder/temb 에 실제 분포의
 빈 프롬프트가 들어가야 12B 백본이 분포 안에서 시작한다.
 
@@ -20,7 +20,8 @@ p(X | Xs, Xc): 스타일 레퍼런스 X(마스크 밖)와 표준폰트 콘텐츠
 
 self-check:
   python models/inkspire.py --smoke                  # 다운로드 없음, tiny 모델, 수 초
-  python models/inkspire.py --smoke --with-weights   # 실제 가중치(hf 로그인 + fetch_flux 선행) — trainable 115,912,704
+  python models/inkspire.py --cache                  # 34GB 다운로드 + 빈 프롬프트 캐시 (= ./train.sh fetch-flux)
+  python models/inkspire.py --smoke --with-weights   # 실제 가중치(--cache 선행) — trainable 115,912,704
 """
 from __future__ import annotations
 
@@ -42,6 +43,13 @@ from diffusers.training_utils import (
 HERE = Path(__file__).resolve().parents[1]
 REPO = "black-forest-labs/FLUX.1-Fill-dev"
 EMPTY_CACHE = HERE / "model_zoo" / "flux_fill_empty_prompt.pt"
+HOWTO = f"""{REPO} 가중치/빈 프롬프트 캐시가 없습니다 (게이트 repo, 비상업 라이선스).
+  1) hf auth login            (https://huggingface.co/settings/tokens 의 read 토큰)
+  2) https://huggingface.co/{REPO} 에서 라이선스 수락
+  3) ./train.sh fetch-flux    (34GB 다운로드 + {EMPTY_CACHE.relative_to(HERE)})"""
+# 루트의 단일파일 flux1-fill-dev.safetensors(24GB 중복)는 받지 않는다
+FETCH = ["model_index.json", "transformer/*", "vae/*", "text_encoder/*", "text_encoder_2/*",
+         "tokenizer/*", "tokenizer_2/*", "scheduler/*"]
 TOK = 16   # ★ 픽셀/토큰
 LAT_C = 16  # Fill-dev VAE latent 채널
 
@@ -63,7 +71,7 @@ def _sched():
 
 
 # ---------------------------------------------------------------- 로드 / 저장
-def _attach_lora(tr, vae, device, lora_rank, lora_alpha, lora_ckpt, grad_ckpt):
+def _attach_lora(tr, vae, device, lora_rank, lora_alpha, lora_ckpt, grad_ckpt, targets=LORA_TARGETS):
     """base 전부 freeze → LoRA 주입(신규 또는 ckpt 복원) → LoRA 만 fp32·학습 → grad-ckpt."""
     from peft import LoraConfig
 
@@ -75,7 +83,7 @@ def _attach_lora(tr, vae, device, lora_rank, lora_alpha, lora_ckpt, grad_ckpt):
         tr.load_lora_adapter(str(lora_ckpt), prefix=None, use_safetensors=True, adapter_name="default")
     else:
         tr.add_adapter(LoraConfig(r=lora_rank, lora_alpha=lora_alpha, init_lora_weights="gaussian",
-                                  target_modules=LORA_TARGETS))
+                                  target_modules=targets))
     for n, p in tr.named_parameters():
         p.requires_grad_("lora" in n)
     cast_training_params(tr, torch.float32)
@@ -98,9 +106,14 @@ def save_lora(transformer, out_dir):
 
 
 @torch.no_grad()
-def empty_prompt_cache(pipe, path=EMPTY_CACHE):
-    """빈 프롬프트 임베딩 1회 계산 → {prompt_embeds[1,512,4096], pooled[1,768], text_ids[512,3]} bf16 저장.
+def empty_prompt_cache(repo=REPO, path=EMPTY_CACHE, device="cuda"):
+    """가중치 다운로드(학습용 transformer 포함) + 빈 프롬프트 임베딩 1회 계산
+    → {prompt_embeds[1,512,4096], pooled[1,768], text_ids[512,3]} bf16 저장. T5/CLIP 은 여기서만 올린다.
     ponytail: 512 토큰 유지. 64 로 줄이면 ~15% 절약되나 Fill-dev 학습 분포와 달라진다."""
+    from huggingface_hub import snapshot_download
+    local = snapshot_download(repo, allow_patterns=FETCH)
+    # transformer/vae 는 안 올림 — encode_prompt 는 텍스트 인코더·토크나이저만 쓴다
+    pipe = FluxFillPipeline.from_pretrained(local, transformer=None, vae=None, torch_dtype=torch.bfloat16).to(device)
     pe, pooled, tids = pipe.encode_prompt(prompt="", prompt_2=None, max_sequence_length=512)
     d = {"prompt_embeds": pe.to(torch.bfloat16).cpu(), "pooled": pooled.to(torch.bfloat16).cpu(),
          "text_ids": tids.cpu()}
@@ -279,16 +292,26 @@ def _smoke(device):
     print(f"[smoke] ok  device={device}  loss={loss.item():.4f}  lora_modules={len(names)}")
 
 
+def _cache_or_exit(make, path, howto, device):
+    """--cache 공용(models/inkspire_klein.py 도 쓴다). 있으면 skip, 미로그인/미수락이면 안내 후 exit 1."""
+    if path.exists():
+        print(f"[skip] {path} already exists"); return
+    try:
+        d = make(device=device)
+    except OSError as e:   # GatedRepoError·미로그인 모두 OSError 계열
+        sys.exit(f"[error] {type(e).__name__}: {str(e).splitlines()[0][:160]}\n{howto}")
+    print(f"[done] {path}  " + ", ".join(f"{k}{tuple(v.shape)}" for k, v in d.items()))
+
+
 def _with_weights(device):
     if device == "cpu":
         print("[skip] --with-weights 는 GPU 필요"); return 2
     if not EMPTY_CACHE.exists():
-        print(f"[skip] {EMPTY_CACHE} 없음 — 먼저 `hf auth login` + 라이선스 수락 후 `python tools/fetch_flux.py`"); return 2
+        print(f"[skip] {EMPTY_CACHE} 없음\n{HOWTO}"); return 2
     try:
         tr, vae = load_flux(device=device)
     except Exception as e:   # 게이트/미다운로드
-        print(f"[skip] FLUX 가중치 로드 실패({type(e).__name__}): {e}\n"
-              f"       `hf auth login` → https://huggingface.co/{REPO} 라이선스 수락 → python tools/fetch_flux.py"); return 2
+        print(f"[skip] FLUX 가중치 로드 실패({type(e).__name__}): {e}\n{HOWTO}"); return 2
     n = sum(p.numel() for p in tr.parameters() if p.requires_grad)
     assert n == 115_912_704, n
     cache = torch.load(EMPTY_CACHE)
@@ -312,10 +335,13 @@ def _with_weights(device):
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--smoke", action="store_true")
+    ap.add_argument("--cache", action="store_true")
     ap.add_argument("--with-weights", action="store_true")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     a = ap.parse_args()
     if a.smoke:
         _smoke(a.device)
+    if a.cache:
+        _cache_or_exit(empty_prompt_cache, EMPTY_CACHE, HOWTO, a.device)
     if a.with_weights:
         sys.exit(_with_weights(a.device))

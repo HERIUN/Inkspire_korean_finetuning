@@ -16,23 +16,11 @@ Content, and Noise* (Wang et al., ICLR 2026, OpenReview `FBPuLChGNX`) 의 한글
 | `custom_datasets/korean/page.py` | 페이지 렌더러(X,Xc) + 글자별 bbox |
 | `models/inkspire_layout.py` | ① masked CFM transformer(페이지내의 글자들 bbox 예측 모델), v-pred L1, 10-step ODE |
 | `models/inkspire.py` | ② 이미지 — FLUX.1-Fill-dev + LoRA r=32 (115.9M, 논문 표 8), R-APE, 텍스트 인코더 제거 |
+| `models/inkspire_klein.py` | ② 이미지(대체 백본, `--backbone klein`) — FLUX.3-Image-Klein-Base(HF `black-forest-labs/flux-3-image-klein-base`) + LoRA r=32 (71.2M). [`docs/EXPERIMENTS.md`](docs/EXPERIMENTS.md) §7 |
 | `train/inkspire_layout.py`, `train/inkspire.py` | 각 트레이너 |
 | `infer/inkspire.py` | one-shot 생성기 + 뷰어 (`InkSpireGen.gen`) |
 | `experiments/gen_compare.py` | 두 체크포인트 생성 비교 몽타주 |
-| `tools/fetch_flux.py` | FLUX 가중치 1회 다운로드 + 빈 프롬프트 임베딩 캐시 |
 | `configs/*.yaml` | 조절 가능한 전부 |
-
-지원 모듈은 원본 repo 에서 가져왔다. `configs/loader.py` · `korean/{fontset,alphabet}.py` ·
-`upstream/constants.py` 는 그대로 복사했고, 아래 넷은 **여기서 쓰는 심볼만 남기고 잘라냈다** —
-그래야 Eruku 모델(`models/eruku.py`)과 `upstream/font_square/*` 의존이 사라진다.
-각 파일 docstring 에 무엇을 왜 버렸는지 적어 뒀다.
-
-| 파일 | 줄 수 | 끊어낸 의존 |
-|---|---|---|
-| `custom_datasets/korean/split.py` | 471 → 175 | `upstream/font_square/*` |
-| `train/core.py` | 733 → 97 | `models/eruku.py`, `korean/handb.py` |
-| `infer/show.py` | 368 → 118 | `models/eruku.py` (InkSpire 백엔드만 남긴 `load_model`/`gen_from_style`) |
-| `experiments/common.py` | 142 → 39 | VAE 실험 헬퍼 |
 
 **CER 평가는 이 repo 에 없다.** HTR 리더와 `eval/htr_cer.py` 경로는 원본
 [Eruku_korean_finetuning](https://github.com/HERIUN/Eruku_korean_finetuning) 에만 있다 —
@@ -54,7 +42,7 @@ python custom_datasets/korean/page.py --n 4    # bbox 왕복·shape·마스크·
 GPU=2 ./train.sh inkspire-layout
 
 # ② 이미지
-GPU=2 ./train.sh fetch-flux                    # hf auth login + 라이선스 수락 선행, 34GB
+GPU=2 ./train.sh fetch-flux                    # hf auth login + 라이선스 수락 선행, 34GB (= models/inkspire.py --cache)
 GPU=2 ./train.sh inkspire
 
 # 추론
@@ -81,6 +69,7 @@ assets/
   korean_charset.json   고정 charset 2,509자 (레이아웃 vocab 의 원천)
 data/ref_set_clean/train_lines.json    뷰어의 style ref 세트 (선택)
 model_zoo/flux_fill_empty_prompt.pt    빈 프롬프트 임베딩 캐시 (`./train.sh fetch-flux` 가 만든다)
+model_zoo/klein_empty_prompt.pt        〃 FLUX.3-Image-Klein-Base 용 (`./train.sh fetch-klein`)
 ```
 
 디렉토리 이름은 이 repo 기준이다. 원본 repo 의 `fonts_korean_v3/train` 등에서 가져온다면
@@ -107,6 +96,7 @@ ln -s $E/korean_charset.json   assets/korean_charset.json
 | 한글 어절 (`corpus/korean_lines.txt`) | [`tools/fetch_corpus.py`](https://github.com/HERIUN/Eruku_korean_finetuning/blob/main/tools/fetch_corpus.py) | 한국어 위키백과 (CC BY-SA 4.0) — HF [`heegyu/kowiki-sentences`](https://huggingface.co/datasets/heegyu/kowiki-sentences) 에서 추출. 고정 charset ∩ 폰트 교집합 밖의 글자가 있는 줄은 버린다. 상세는 [`assets/corpus/README.md`](https://github.com/HERIUN/Eruku_korean_finetuning/blob/main/assets/corpus/README.md) |
 | 영어 단어 (`corpus/english_words.txt`) | 〃 | [dwyl/english-words](https://github.com/dwyl/english-words) |
 | 표준폰트 (`fonts/label`) | 직접 배치 | [나눔고딕](https://hangeul.naver.com/font) (SIL OFL 1.1) |
+| FLUX.3-Image-Klein-Base (`--backbone klein` 일 때만) | `./train.sh fetch-klein`(빈 프롬프트 캐시) — 나머지 가중치는 첫 학습 때 HF 에서 자동 다운로드 | [black-forest-labs/flux-3-image-klein-base](https://huggingface.co/black-forest-labs/flux-3-image-klein-base) — **게이트 repo · 비상업 라이선스(FLUX Kommunity)**. diffusers git main 필요 |
 | FLUX.1-Fill-dev 34GB | `./train.sh fetch-flux` | [black-forest-labs/FLUX.1-Fill-dev](https://huggingface.co/black-forest-labs/FLUX.1-Fill-dev) — **게이트 repo · 비상업 라이선스**. `hf auth login` + 모델 페이지 라이선스 수락 선행 |
 
 `assets/backgrounds` 는 더 이상 쓰지 않는다. 종이 배경 패치라는 이름과 달리 3장 전부 단색
@@ -143,7 +133,7 @@ w·h·Δy 는 논문 표 1 보다 낫다. 무너지는 건 추론이고, 이유�
 
 그래서 **기본 경로는 std layout**(표준폰트 렌더 bbox 그대로, 줄 간격 77px 고정)이다. 필체 적응은
 없지만 누적 오차가 0 이고, 측정에서 6쌍 전부 같거나 나았다(held-out style-ref CER 0.197 vs 0.222).
-`--layout-ckpt` 를 생략하면 이 경로를 탄다. 수치는 [`docs/EXPERIMENTS.md`](docs/EXPERIMENTS.md) §12,
+`--layout-ckpt` 를 생략하면 이 경로를 탄다. 수치는 [`docs/EXPERIMENTS.md`](docs/EXPERIMENTS.md) §4,
 분해는 [`docs/inkspire.md`](docs/inkspire.md) §9.1.
 
 레이아웃 모델을 살리려면 **재학습이 아니라** (a) 추론에서 진짜 레퍼런스 레이아웃을 줄 수 있거나
@@ -175,5 +165,5 @@ w·h·Δy 는 논문 표 1 보다 낫다. 무너지는 건 추론이고, 이유�
 
 ## 라이선스 주의
 
-FLUX.1-Fill-dev 는 게이트 repo이자 **비상업 라이선스**다. 가중치를 받으려면 `hf auth login` 과
+FLUX.1-Fill-dev 와 FLUX.3-Image-Klein-Base(`black-forest-labs/flux-3-image-klein-base`)는 둘 다 게이트 repo이자 **비상업 라이선스**다. 가중치를 받으려면 `hf auth login` 과
 모델 페이지에서 라이선스 수락이 선행돼야 한다.

@@ -37,7 +37,7 @@ sys.path.insert(0, str(HERE))
 
 from configs import loader as _config                                             # noqa: E402
 from custom_datasets.korean.page import STD_FONT, KoreanPageDataset                         # noqa: E402
-from infer.inkspire import load_flux_or_exit                                       # noqa: E402
+from infer.inkspire import backbone, load_flux_or_exit                                      # noqa: E402
 from train.core import (PATH_ARGS, data_paths_of, load_rng_state, log_run_config,   # noqa: E402
                         require_optim_state, rng_state)
 
@@ -52,8 +52,10 @@ def make_parser():
     p.add_argument("--num-workers", type=int, default=16)
     p.add_argument("--save-every", type=int, default=1000)
     p.add_argument("--log-every", type=int, default=20)
-    p.add_argument("--flux-repo", default="black-forest-labs/FLUX.1-Fill-dev")
-    p.add_argument("--empty-cache", default=str(HERE / "model_zoo/flux_fill_empty_prompt.pt"))
+    p.add_argument("--backbone", choices=["flux1", "klein"], default="flux1",
+                   help="flux1 = FLUX.1-Fill-dev(models/inkspire.py) / klein = FLUX.3-Image-Klein-Base, black-forest-labs/flux-3-image-klein-base(models/inkspire_klein.py)")
+    p.add_argument("--flux-repo", default=None, help="기본 = 백본 모듈의 REPO")
+    p.add_argument("--empty-cache", default=None, help="기본 = 백본 모듈의 EMPTY_CACHE")
     p.add_argument("--lora-rank", type=int, default=32)
     p.add_argument("--lora-alpha", type=int, default=32)
     p.add_argument("--rape", action=B, default=True, help="90° 회전 후 [X|Xc] 연결")
@@ -119,9 +121,10 @@ def main():
         print(f"val fonts {len(vds.fonts)}  batches {len(val)} (mode=line)")
 
     # ── FLUX + LoRA + 옵티마이저 ──
-    tr, vae, cache = load_flux_or_exit(device, args.empty_cache, repo=args.flux_repo, lora_rank=args.lora_rank,
+    M = backbone(args.backbone)
+    tr, vae, cache = load_flux_or_exit(device, args.empty_cache, M=M, repo=args.flux_repo, lora_rank=args.lora_rank,
                                        lora_alpha=args.lora_alpha, lora_ckpt=args.resume, grad_ckpt=args.grad_ckpt)
-    from models.inkspire import build_inputs, cfm_loss, generate, save_lora
+    build_inputs, cfm_loss, generate, save_lora = M.build_inputs, M.cfm_loss, M.generate, M.save_lora
     tr.train()
     params = [p for p in tr.parameters() if p.requires_grad]
     print(f"trainable {sum(p.numel() for p in params):,}")

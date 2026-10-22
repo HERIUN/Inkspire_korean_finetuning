@@ -13,8 +13,9 @@ run:
   log_every: 20
 
 model:
-  flux_repo: black-forest-labs/FLUX.1-Fill-dev
-  empty_cache: model_zoo/flux_fill_empty_prompt.pt  # 빈 프롬프트 임베딩 캐시 (텍스트 인코더 미탑재)
+  backbone: flux1                    # flux1 = FLUX.1-Fill-dev | klein = FLUX.3-Image-Klein-Base, HF black-forest-labs/flux-3-image-klein-base (models/inkspire_klein.py, EXPERIMENTS §7)
+  flux_repo: null                    # null = 백본 모듈 기본 repo
+  empty_cache: null                  # null = 백본 모듈 기본 빈 프롬프트 캐시 (텍스트 인코더 미탑재)
   lora_rank: 32                      # 논문 r=32, α=32 → 115.9M
   lora_alpha: 32
   rape: true                         # 90° 회전 후 [X|Xc] 연결 (표 4·5)
