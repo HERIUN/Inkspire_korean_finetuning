@@ -15,7 +15,8 @@
 | 6 | 논문 수치로 본 Eruku 대비 (IAM) | 논문 조건에선 InkSpire 우세 |
 | 7 | 이미지 백본 FLUX.3-Image-Klein-Base | CER 0.040 → 0.026 |
 | 8 | ref 보강 (inference loop) | 효과 없음 — 접음 |
-| 9 | 결론 | |
+| 9 | 스타일 지표 (HWD·FID) | 줄 폭 보정(`ref_width`) 후 HWD 는 InkSpire 0.93 < Eruku 0.99 |
+| 10 | 결론 | |
 
 논문: *Learning to Generate Stylized Handwritten Text via a Unified Representation of Style, Content, and Noise*
 (Wang et al., ICLR 2026, `docs/inkspire.pdf`). 두 단계 분해 p(X, Xc | C, Xs) = p(Xc | C, Xs)·p(X | Xs, Xc) 를 합성 폰트
@@ -167,7 +168,7 @@ InkSpire 의 "VATr" 34.00 / 2.38 / 0.03 = Eruku 표의 **VATr++** 행). 같은 P
 - 단 조건이 다르다: (a) InkSpire 는 IAM 으로 학습, Eruku 는 IAM 미학습(zero-shot). (b) InkSpire 는 ref 의 전사 + 글자 bbox 정답 주석을 받는다.
   (c) InkSpire 의 IAM 추론은 같은 writer 의 둘째 줄로 첫 줄을, 첫 줄로 나머지를 만든다(논문 §4.3) — 같은 문단의 실제 줄이 ref 다.
 - 우리 한글 재현(§5)과 방향이 반대인 이유 후보: 학습 분포 안(IAM seen) vs 밖(held-out 폰트), FID/HWD 는 스타일 지표이고 우리는 CER 만 쟀다,
-  P=1024 vs 512. **스타일 지표(HWD)로는 아직 비교하지 않았다** — §9 의 재개 조건과 같다.
+  P=1024 vs 512. 한글 HWD 비교는 §9 — 한글 조건에선 Eruku 가 앞선다.
 
 ## 7. 이미지 백본 FLUX.3-Image-Klein-Base — `black-forest-labs/flux-3-image-klein-base` (2026-10-21~)
 
@@ -314,13 +315,63 @@ cd $E && .venv-paddle/bin/python eval/ppocr_rec.py $O/gen --save-preds
 python docs/_gen_inkspire_ctx.py      # 그림 14~16 (추론 없음, 덤프만 읽는다)
 ```
 
-## 9. 결론
+## 9. 스타일 지표 — HWD · FID · BFID · KID (2026-10-22)
+
+### 왜
+
+§6 에서 논문 IAM 수치로는 InkSpire 가 스타일(HWD 0.62 vs Eruku 1.70)에서 크게 앞섰고, §10 결론은 "InkSpire 를 다시 꺼낼 근거는
+CER 이 아니라 스타일"이었다. 한글에서도 그런지 잰다.
+
+### 어떻게
+
+`experiments/style_scores.py` — 원본 repo `.venv` 의 `hwd` 패키지(Eruku 논문 표 3 과 같은 구현, 높이 32). 추론 없이 §5·§7 의 덤프를 읽는다.
+real = 같은 표본의 GT 렌더, fake = 각 모델 출력, 폴더명 = 폰트(필기자) → HWD 는 폰트별 VGG16 특징 거리의 평균.
+하한 기준으로 **std-font**(목표 텍스트를 표준폰트 NanumGothic 으로 렌더 = 스타일 복제 0)를 같이 잰다.
+
+★ **정규화 필수.** 덤프마다 위아래 여백(GT 30% / InkSpire 17% / Eruku 20%)과 배경(InkSpire 249~251, 나머지 255)이 달라
+높이 32 로 줄이면 글자 크기·밝기 차이를 FID 가 잡는다 — 정규화 전에는 InkSpire FID(57.7)가 std-font(59.7)와 비슷했다.
+모든 이미지(real 포함)를 배경 → 255, 잉크 bbox 크롭, 잉크 높이 15% 여백으로 맞춘다(기본, `--raw` 로 끔).
+
+### 결과 (held-out 16폰트, n=300, 정규화)
+
+| | HWD↓ | FID↓ | BFID↓ | KID↓ | 출력 폭 vs GT (중앙값) |
+|---|---|---|---|---|---|
+| FLUX.3-Image-Klein-Base s13000 | 1.338 | 45.7 | 24.0 | 0.021 | +23% |
+| **FLUX.3-Image-Klein-Base s13000 + `ref_width`** | **0.929** | 37.3 | 16.2 | 0.014 | **7%** |
+| FLUX.1-Fill-dev s13000 | 1.306 | 48.2 | 22.3 | 0.024 | +22% |
+| **Eruku s45000** | **0.989** | **26.0** | **15.7** | **0.003** | **7%** |
+| std-font (스타일 복제 0) | 3.281 | 60.1 | 45.3 | 0.030 | +18% |
+
+결과 `finetune_runs/_cer/style_scores.json`. 정규화 전(`--raw`): HWD 1.58 / 1.54 / 1.35 / 3.40, FID 57.7 / 61.6 / 34.8 / 59.7 (같은 순서).
+
+1. **한글 합성 폰트 조건에서는 스타일도 Eruku 가 앞선다.** 논문 IAM(§6)과 방향이 반대다. 두 InkSpire 백본은 서로 비슷하다 —
+   FLUX.3-Image-Klein-Base 는 CER 만 좋아졌고 스타일은 그대로다.
+2. **원인 후보: 줄 기하가 표준폰트를 따른다.** std layout 은 목표 줄 글자 상자를 NanumGothic 그대로 두므로 InkSpire 출력의 줄 폭은
+   GT 보다 22~23% 넓다 — 스타일 복제 0 인 std-font(18%)보다도 멀다. Eruku 는 자간·글자 폭까지 생성해 7% 다. 글자 모양은 필체를
+   닮아도 줄 모양이 NanumGothic 이다. 논문은 이 자리에 레이아웃 모델을 쓰고(§3, 우리는 한 줄 생성에서 CER 손해) IAM 은 GT 레이아웃이 있다.
+3. **재학습 없는 보정 `ref_width` 로 줄 폭을 맞추면 HWD 가 Eruku 를 넘는다.** ref 줄은 이미 "손글씨 폭 / 표준폰트 폭" 비율을
+   안다(ref 상자를 그 비율로 늘리고 있었다). 같은 비율을 목표 줄 상자 x 에도 곱한다 — `InkSpireGen(ref_width=True)` /
+   `inkspire:<lora>,ref_width=1`. **2026-10-22 부터 기본값 켬** — §2~§8 의 수치는 꺼진 상태(재현은 `,ref_width=0`). 출력 폭 오차 23% → 7%(Eruku 와 같음), **HWD 1.338 → 0.929(Eruku 0.989)**, FID 45.7 → 37.3,
+   BFID 24.0 → 16.2(Eruku 15.7). FID·KID 는 여전히 Eruku 가 낫다.
+   **CER 은 그대로** — 0.026 → 0.023, 표본별 54 나음 / 50 나쁨(p=0.70). 결과 `finetune_runs/_cer/klein_s013000_refwidth`.
+
+![ref_width](img_inkspire_io/17_ref_width.png)
+
+무작위 10표본(`experiments/montage.py --seed 3`). 가운데 두 열 = 기준선 / `ref_width`. 00184 "두리번거리다", 00244 "불완전하다" 처럼
+기준선은 자간이 표준폰트만큼 벌어지고, `ref_width` 는 GT 처럼 붙는다.
+
+한계: 비율은 ref 한 줄 전체의 평균이라 글자별 폭 차이(예: 숫자·라틴만 좁은 폰트)는 못 맞춘다 — 그건 레이아웃 모델의 몫이다.
+GT 가 폰트 렌더라 "줄 폭 = 폰트 고유 자간" 이 정확히 정해진 조건이다. 실손글씨는 줄마다 자간이 흔들려 이득이 줄 수 있다.
+
+## 10. 결론
 
 - **한글 한 줄 생성(우리 측정, CER)은 Eruku 가 앞선다** — PP corpus 0.018 vs 0.040. InkSpire 는 ref 전사가 필수라 실사용 제약도 크다.
 - **논문 조건(IAM, 스타일 지표)에서는 InkSpire 가 Eruku 를 크게 앞선다**(§6, HWD 0.62 vs 1.70) — 다만 IAM 학습 여부·주석 입력이 달라 공정 비교는 아니다.
-- 그래서 InkSpire 를 다시 꺼낼 근거는 CER 이 아니라 **스타일 충실도(HWD)** 와 다줄·편집 기능이다. 재학습보다 HWD 비교를 먼저 한다.
+- 그래서 InkSpire 를 다시 꺼낼 근거는 CER 이 아니라 **스타일 충실도(HWD)** 와 다줄·편집 기능이다 → HWD 는 §9 에서 쟀다.
 - **FLUX.3-Image-Klein-Base 백본(§7)은 한글 CER 격차를 절반 넘게 줄였다**(0.040 → 0.026, Eruku 0.018). 숫자·기호 약점은 사실상 해소, 남은 건 한글 모음 획.
   ref 전사 필수라는 구조적 제약(§5)은 그대로다.
+- **스타일(§9): 줄 폭 보정(`ref_width`)을 켜면 HWD 는 InkSpire 가 앞선다**(0.93 vs Eruku 0.99, 끄면 1.34). FID·KID 는 Eruku 가 낫다.
+  CER 은 Eruku 0.018 vs InkSpire 0.023. 정리하면 **글자 정확도는 Eruku, 필체 거리(HWD)는 InkSpire(+ref_width)** 이고 둘 다 차이는 작다.
 - **ref 보강(§8)은 효과가 없다.** 목표 글자의 진짜 필체를 보여줘도 상한이 기준선과 같다 — 남은 오류는 획 정확도다.
 
 생성 결과 비교: 저장된 덤프를 합치기만 하는 `experiments/montage.py`(추론 없음, `--pick random|worst|diff`, `--font`, `--runs`, `--show-ctx`).

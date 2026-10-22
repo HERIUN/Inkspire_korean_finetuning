@@ -133,7 +133,8 @@ w·h·Δy 는 논문 표 1 보다 낫다. 무너지는 건 추론이고, 이유�
 
 그래서 **기본 경로는 std layout**(표준폰트 렌더 bbox 그대로, 줄 간격 77px 고정)이다. 필체 적응은
 없지만 누적 오차가 0 이고, 측정에서 6쌍 전부 같거나 나았다(held-out style-ref CER 0.197 vs 0.222).
-`--layout-ckpt` 를 생략하면 이 경로를 탄다. 수치는 [`docs/EXPERIMENTS.md`](docs/EXPERIMENTS.md) §4,
+`--layout-ckpt` 를 생략하면 이 경로를 탄다.
+목표 줄 상자 폭은 ref 의 "손글씨 폭 / 표준폰트 폭" 비율로 맞춘다(`ref_width`, 기본 켬 — 끄면 자간이 표준폰트를 따라 HWD 1.34, 켜면 0.93). 수치는 [`docs/EXPERIMENTS.md`](docs/EXPERIMENTS.md) §4,
 분해는 [`docs/inkspire.md`](docs/inkspire.md) §9.1.
 
 레이아웃 모델을 살리려면 **재학습이 아니라** (a) 추론에서 진짜 레퍼런스 레이아웃을 줄 수 있거나

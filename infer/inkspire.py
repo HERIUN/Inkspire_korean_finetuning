@@ -77,12 +77,14 @@ def _ink_box(arr, th=250):
 
 class InkSpireGen:
     def __init__(self, lora_dir=None, layout_ckpt=None, device="cuda", steps=20, guidance=30.0,
-                 rape=True, ape=True, std_font=STD_FONT, trim_ref=True, degrade=0.0, tight_mask=False):
+                 rape=True, ape=True, std_font=STD_FONT, trim_ref=True, degrade=0.0, tight_mask=False, ref_width=True):
         """lora_dir=None 이면 FLUX 를 안 올린다(prepare/--dry-run 전용). layout_ckpt=None → std layout.
         tight_mask: 마스크 = [ref 잉크 바닥 ↑16격자, 목표 상자 바닥+4 ↑16격자) — 캔버스도 거기서 끝난다.
-          기본(False)은 y_cut = clip(목표 top−2, ref 바닥+1, TOP+PITCH), H = max(TOP+PITCH·(n+1), 상자 바닥+8)."""
+          기본(False)은 y_cut = clip(목표 top−2, ref 바닥+1, TOP+PITCH), H = max(TOP+PITCH·(n+1), 상자 바닥+8).
+        ref_width(기본 켬, 2026-10-22~): 목표 줄 상자의 x 를 ref 의 "손글씨 폭 / 표준폰트 폭" 비율로 늘이거나 줄인다(std layout 전용).
+          끄면 목표 줄 폭·자간이 표준폰트 그대로라 출력이 GT 보다 ~23% 넓다(Eruku 7%) — HWD 의 큰 몫(EXPERIMENTS §9)."""
         self.device, self.steps, self.guidance, self.rape, self.ape = device, steps, guidance, rape, ape
-        self.trim_ref, self.degrade, self.tight_mask = trim_ref, degrade, tight_mask
+        self.trim_ref, self.degrade, self.tight_mask, self.ref_width = trim_ref, degrade, tight_mask, ref_width
         self.std_font_path = std_font          # ★ 학습(configs/inkspire.yaml data.std_font)과 같아야 한다
         self.std_font = page._font(str(std_font), font_px(std_font, LINE_H))
         self.layout = None
@@ -106,6 +108,7 @@ class InkSpireGen:
         ink_h, y_ref = b[3] - b[1], TOP + b[1]                       # 표준폰트 '한글' 잉크 행
 
         vis, chars, boxes, line_id, row = [], [], [], [], []
+        sx = 1.0   # 목표 줄 x 배율 (ref_width)
         for r, (arr, text, *xb) in enumerate([(style_arr, style_text), *ctx]):   # 보이는 줄 r = ref(0), ctx(1..k)
             ib = _ink_box(arr)
             im = arr[ib[1]:ib[3], ib[0]:ib[2]] if ib else arr
@@ -125,11 +128,15 @@ class InkSpireGen:
                         bx[:, [0, 2]] = LEFT + (np.asarray(xb[0], np.float32) - x0) * w / im.shape[1]
                     else:
                         bx[:, [0, 2]] = LEFT + (bx[:, [0, 2]] - x0) * w / max(1.0, x1 - x0)
+                        if r == 0 and self.ref_width:
+                            sx = w / max(1.0, x1 - x0)
                     chars += ch; boxes.append(bx); line_id += [0] * len(ch); row += [r] * len(ch)
         k = len(vis) - 1
         for i, text in enumerate(lines):   # 타깃 토큰: std layout 을 초기값/기본값으로
             _, ch, bx = render_line(self.std_font, text, 4 * MAX_W, TOP + (i + 1 + k) * PITCH, LEFT)
-            chars += ch; boxes.append(bx.astype(np.float32)); line_id += [i + 1] * len(ch); row += [-1] * len(ch)
+            bx = bx.astype(np.float32)
+            bx[:, [0, 2]] = LEFT + (bx[:, [0, 2]] - LEFT) * sx
+            chars += ch; boxes.append(bx); line_id += [i + 1] * len(ch); row += [-1] * len(ch)
         boxes = np.concatenate(boxes, 0) if boxes else np.zeros((0, 4), np.float32)
         line_id, row = np.array(line_id, dtype=np.int64), np.array(row, dtype=np.int64)
         if self.layout is not None and len(chars):
