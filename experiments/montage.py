@@ -6,6 +6,7 @@
   python experiments/montage.py                                   # 기본 3모델, 무작위 24행
   python experiments/montage.py --pick worst --n 16               # 모델 중 최악 CER 이 큰 순
   python experiments/montage.py --pick diff --font NanumBrushScript
+  python experiments/montage.py --where "A<B" --one-per-font    # A 가 B 보다 CER 낮은 표본, 격차 큰 순, 폰트당 1개
   python experiments/montage.py --runs "A=finetune_runs/_cer/x" "B=finetune_runs/_cer/y" --out _debug/ab.png
 """
 import argparse
@@ -50,6 +51,8 @@ def main():
     ap.add_argument("--pick", choices=["random", "worst", "diff"], default="random",
                     help="worst = 모델 중 최대 CER 큰 순 / diff = 모델 간 CER 차이 큰 순")
     ap.add_argument("--font", default=None, help="폰트 이름 부분일치 필터")
+    ap.add_argument("--where", default=None, help='"라벨A<라벨B" — A 의 CER 이 B 보다 낮은 표본만, 격차 큰 순')
+    ap.add_argument("--one-per-font", action="store_true", help="정렬 순서대로 폰트당 1개")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--cell-w", type=int, default=560)
     ap.add_argument("--cell-h", type=int, default=60)
@@ -70,6 +73,13 @@ def main():
     else:
         key = (lambda n: max(cer[n])) if a.pick == "worst" else (lambda n: max(cer[n]) - min(cer[n]))
         names.sort(key=key, reverse=True)
+    if a.where:
+        la, lb = (x.strip() for x in a.where.split("<"))
+        ia, ib = [lab for lab, _ in runs].index(la), [lab for lab, _ in runs].index(lb)
+        names = sorted((n for n in names if cer[n][ia] < cer[n][ib]), key=lambda n: cer[n][ib] - cer[n][ia], reverse=True)
+    if a.one_per_font:
+        seen = set()
+        names = [n for n in names if not (Path(rows[n]["font"]).stem in seen or seen.add(Path(rows[n]["font"]).stem))]
     names = names[:a.n]
     if not names:
         sys.exit("[error] 조건에 맞는 표본 없음")
@@ -79,7 +89,9 @@ def main():
     for n in names:
         r = rows[n]
         fp = Path(r["font"])
-        if fp not in ref_cache:   # 모델이 받은 것과 같은 64px ref
+        if "ref_image" in r:      # realhw_dump.py — ref 가 실제 이미지
+            ref_cache[fp] = np.array(Image.open(r["ref_image"]).convert("L"))
+        elif fp not in ref_cache:   # 모델이 받은 것과 같은 64px ref
             t = style_tensor(render_in_font(fp, plan["style_ref_text"]))
             ref_cache[fp] = ((t[0].numpy() + 1) * 127.5).clip(0, 255).astype(np.uint8)
         gt = np.array(Image.open(runs[0][1] / "gt" / n).convert("L")) if (runs[0][1] / "gt" / n).exists() \
