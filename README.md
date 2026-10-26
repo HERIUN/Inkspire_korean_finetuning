@@ -6,6 +6,67 @@ Content, and Noise* (Wang et al., ICLR 2026, OpenReview `FBPuLChGNX`) 의 한글
 
 - 설계·이슈·측정값: [`docs/inkspire.md`](docs/inkspire.md)
 
+## Eruku 와 비교 (w/ T_s — ref 전사를 줄 때)
+
+InkSpire = 이 repo 최종(FLUX.3-Image-Klein-Base s13000 + LoRA, `ref_width`). Eruku = [Eruku_korean_finetuning](https://github.com/HERIUN/Eruku_korean_finetuning)
+최종(corpusmax s45000 = HF 릴리즈, 새 디코딩 `gen_only="ctx"`). 두 모델에 **같은 ref 이미지 + 그 전사**를 준다(InkSpire 는 전사가 필수, Eruku 는 선택).
+Eruku cfg 는 한글 권장 1.5, IAM 은 원본 IAM 프로토콜의 γ=1.25. 상세·재현: [`docs/EXPERIMENTS.md`](docs/EXPERIMENTS.md) §5·§9·§10.
+
+**한 줄 요약 — 글자 정확도는 Eruku, 필체 형태(HWD)와 지저분한 ref 견고성은 InkSpire.**
+
+### 한글 폰트 (held-out 16폰트 · n=300 · ref "다람쥐 헌 쳇바퀴에 타고파" · PP-OCRv6)
+
+| | CER↓ | 한글 | 숫자 | 기호 | HWD↓ | FID↓ | BFID↓ |
+|---|---|---|---|---|---|---|---|
+| InkSpire | 0.023 | 1.9% | 3.2% | **2.2%** | **0.93** | 37.3 | 16.2 |
+| Eruku | **0.010** | **0.8%** | **1.9%** | 5.8% | 1.12 | **26.8** | 16.2 |
+
+![한글 폰트 몽타주](docs/img_readme/font_render.png)
+
+열 = ref | GT(그 폰트 렌더) | InkSpire | Eruku. 셀 라벨 = PP-OCR 판독과 CER(틀리면 회색).
+
+### 실제 손글씨 ([HERIUN/korean-handwriting](https://huggingface.co/datasets/HERIUN/korean-handwriting), 교차 생성)
+
+같은 사람이 쓴 **다른** 표본의 문구를 쓰게 하고 그 표본의 실제 이미지와 비교한다(hw_line = 한 사람의 문장 20줄, 서식 = 행정 서식 손글씨 칸 크롭).
+ref 는 원본 repo 공식 `ink_bbox_crop` 으로 자른다.
+
+| subset | n | 실제 이미지 CER (리더 바닥) | InkSpire CER | Eruku CER | 표본별 InkSpire / Eruku 승 | HWD↓ InkSpire / Eruku |
+|---|---|---|---|---|---|---|
+| 문장 (hw_line) | 20 | 0.133 | 0.246 | **0.014** | 0 / **19** | **1.35** / 1.51 |
+| 서식 (seosik_hw) | 286 | 0.129 | **0.417** | 0.771 (백지 7·폭주 11) | **134** / 101 | **1.20** / 1.83 |
+| 전체 | 338 | 0.136 | **0.398** | 0.667 | 145 / 136 | **1.31** / 1.81 |
+
+![실손글씨 문장](docs/img_readme/real_hw_line.png)
+
+![실손글씨 서식](docs/img_readme/real_hw_forms.png)
+
+열 = ref(같은 사람의 다른 표본) | GT(목표 문구의 실제 이미지) | InkSpire | Eruku.
+
+자유 문구(데이터에 없는 한글 5개 + 영어 2개, 행 = ref 7개, 칸마다 위 InkSpire / 아래 Eruku):
+
+![실손글씨 자유 문구](docs/img_readme/real_hw_free.png)
+
+### IAM lines (SHTG-IAM, Eruku 논문 표 3 프로토콜 · 2,925줄 · 필기자 161명)
+
+| 모델 | IAM 학습 | HWD↓ | ΔCER↓ | FID↓ | BFID↓ |
+|---|---|---|---|---|---|
+| 논문 InkSpire (논문 표 2) | ✓ (+ 글자 bbox 주석) | **0.62** | **0.01** | **7.92** | — |
+| 논문 Eruku (Eruku 논문 표 3) | ✗ | 1.70 | 0.06 | 16.40 | 4.88 |
+| Eruku 한글 파인튜닝 (측정) | ✗ | **1.62** | **−0.03** | 20.00 | **4.73** |
+| InkSpire 한글 (이 repo, 측정) | ✗ | 1.68 | 0.33 | **18.58** | 15.41 |
+
+측정 두 행은 원본 repo `eval/iam_shtg.py`(ours 프로토콜)로 같은 ref·같은 채점기. InkSpire 는 `experiments/iam_dump.py` 로 생성해 그 채점기에 넣었다.
+이 repo 의 InkSpire 는 한글 폰트 페이지(영어 단어 혼합)로만 학습해 IAM 은 zero-shot 이다 — 논문 InkSpire 는 IAM 으로 학습했다.
+
+![IAM 몽타주](docs/img_readme/iam_lines.png)
+
+열 = ref(같은 필기자의 다른 줄) | GT(실제 줄) | InkSpire | Eruku.
+
+- **IAM 에서도 같은 그림이다** — HWD·FID 는 비슷하고(InkSpire FID 가 조금 낫다), 글자 정확도(ΔCER 0.33 vs −0.03)와 BFID 는 Eruku 가 크게 앞선다.
+  몽타주에서 InkSpire 는 필기자의 기울기·획 질감을 따라가지만 단어가 무너진다.
+- **InkSpire 가 실손글씨에서 정확도를 잃는 이유:** ref 의 글자 모양을 Xc 대응표로 베끼는 구조라, 폰트로만 학습한 모델에 분포 밖 실제 글자 모양이 들어오면
+  그 모양을 그대로 옮겨 틀린다(획 굵기·흐림·자간 어긋남은 주원인이 아님 — EXPERIMENTS §10 진단). 같은 구조가 HWD 우위(이진화해도 유지)를 만든다.
+
 
 ## 구조
 

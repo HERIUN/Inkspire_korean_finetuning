@@ -17,7 +17,8 @@
 | 8 | ref 보강 (inference loop) | 효과 없음 — 접음 |
 | 9 | 스타일 지표 (HWD·FID) | 줄 폭 보정(`ref_width`) 후 HWD 는 InkSpire 0.93 < Eruku 0.99(cfg 1.0)~1.12(cfg 1.5) |
 | 10 | 실손글씨 (HERIUN/korean-handwriting) — Eruku 추론 설정 정정 포함 | 문장 정확도는 Eruku 압도, HWD·지저분한 ref 견고성은 InkSpire. 원인 = 주로 분포 밖 글자 모양(자간 어긋남은 작음) |
-| 11 | 결론 | |
+| 11 | VAE 비교 (Eruku vs InkSpire) · 획이 날아가는 이유 | VAE 는 병목 아님(Flux2 가 4배 정확). 흐린 획은 ref 농도를 베낀 것 |
+| 12 | 결론 | |
 
 논문: *Learning to Generate Stylized Handwritten Text via a Unified Representation of Style, Content, and Noise*
 (Wang et al., ICLR 2026, `docs/inkspire.pdf`). 두 단계 분해 p(X, Xc | C, Xs) = p(Xc | C, Xs)·p(X | Xs, Xc) 를 합성 폰트
@@ -168,8 +169,12 @@ InkSpire 의 "VATr" 34.00 / 2.38 / 0.03 = Eruku 표의 **VATr++** 행). 같은 P
 | Emuru | 13.89 | 1.87 | 0.14 | ✗ (zero-shot) |
 | Eruku (γ=1.25) | 16.40 | 1.70 | 0.06 | ✗ (zero-shot) |
 | **InkSpire** | **7.92** | **0.62** | **0.01** | ✓ |
+| Eruku 한글 파인튜닝 (측정, 원본 `eval/iam_shtg.py` ours, γ=1.25, w/ T_s) | 20.00 | 1.62 | −0.03 | ✗ |
+| InkSpire 한글 (이 repo, 측정 2026-10-26, 같은 채점기·같은 ref) | 18.58 | 1.68 | 0.33 | ✗ (zero-shot) |
 
 - **논문 조건에서는 InkSpire 가 전 지표 우세**, 특히 HWD(스타일) 0.62 vs 1.70 로 차이가 크다.
+- **같은 IAM 을 우리 두 한글 모델로 직접 재면(전체 2,925줄, `experiments/iam_dump.py`) InkSpire 의 우세는 사라진다** — HWD 1.68 vs 1.62, FID 18.58 vs 20.00 로 비슷하고
+  ΔCER 0.33 vs −0.03, BFID 15.41 vs 4.73 로 Eruku 가 앞선다. 논문 InkSpire 의 우세는 IAM 학습 + 글자 bbox 주석에서 온다. 결과 `finetune_runs/_iam/inkspire_klein_lines`.
 - 단 조건이 다르다: (a) InkSpire 는 IAM 으로 학습, Eruku 는 IAM 미학습(zero-shot). (b) InkSpire 는 ref 의 전사 + 글자 bbox 정답 주석을 받는다.
   (c) InkSpire 의 IAM 추론은 같은 writer 의 둘째 줄로 첫 줄을, 첫 줄로 나머지를 만든다(논문 §4.3) — 같은 문단의 실제 줄이 ref 다.
 - 우리 한글 재현(§5)과 방향이 반대인 이유 후보: 학습 분포 안(IAM seen) vs 밖(held-out 폰트), FID/HWD 는 스타일 지표이고 우리는 CER 만 쟀다,
@@ -480,7 +485,51 @@ CER 이 폰트 렌더 0.023 → 실손글씨 문장(교차) 0.246 으로 10배�
 끌어와 다시 쓰므로 정확·선명하지만 형태가 평균화된다(HWD↑).
 개선 방향(미검증): 실손글씨 학습 데이터, ref 의 글자 bbox 를 실제로 추정해 대응표를 맞추기(단 §3 의 이미지 분할 bbox 는 실패했다).
 
-## 11. 결론
+## 11. VAE 비교 — Eruku vs InkSpire, 그리고 InkSpire 획이 날아가는 이유 (2026-10-26)
+
+### 구조
+
+| | Eruku VAE | InkSpire VAE (FLUX.3-Image-Klein-Base 의 Flux2) |
+|---|---|---|
+| 클래스 | `AutoencoderKL` (Emuru VAE + 한글 파인튜닝 가중치, corpusmax ckpt 의 `vae.*`) | `AutoencoderKLFlux2` (범용) |
+| 입력 → 출력 | RGB 3ch → **흑백 1ch** | RGB 3ch → RGB 3ch |
+| latent | **1ch** × H/8 × W/8 (64px 줄 → [1, 8, W/8]) | **32ch** × H/8 × W/8 (patchify 후 16px 당 128) |
+| 압축 (픽셀 : 숫자) | **64 : 1** | **2 : 1** |
+| 학습 목표 | 스타일 입힌 RGB → 깨끗한 흑백(정규화를 학습) + 한글 HTR loss | 항등 재구성 |
+| 생성 모델 학습 중 | 동결(`train/core.py:402`). 그 전에 `train/vae_korean.py` 로 따로 한글 적응 | 동결. 파인튜닝 없음 — LoRA(transformer)만 학습 |
+
+### 한글 획 복원력 (인코딩 → 디코딩만, 64px, `experiments/vae_recon.py --vae flux2|eruku`)
+
+| | PP-OCR CER 원본 → 왕복 | 잉크 IoU 원본↔왕복 | 획 평균 밝기 원본 → 왕복 (0=검정) |
+|---|---|---|---|
+| 한글 폰트 300장(§5 표본) | 0.0056 → Flux2 **0.0062** / Eruku 0.0232 | Flux2 **0.973** / Eruku 0.879 | 50 → 53 / 33 |
+| 실손글씨 문장 20장 | 0.113 → Flux2 **0.102** / Eruku 0.188 | Flux2 **0.958** / Eruku 0.688 | 137 → 141 / 41 |
+| IAM 100줄 | (영어 — PP-OCR 불가) | Flux2 **0.958** / Eruku 0.752 | 121 → 123 / 44 |
+
+![VAE 왕복](img_inkspire_io/19_vae_compare.png)
+
+세 줄씩 = 원본 / Flux2 왕복 / Eruku 왕복(위부터 폰트 2 · 실손글씨 문장 2 · IAM 2).
+
+- **Flux2 는 거의 항등이다** — 연한 회색 획까지 그대로. **Eruku VAE 는 획을 진하고 굵게 다시 그리며 모양을 바꾼다**("책을 → 적을", "학교 → 학모",
+  IAM 영어 단어 밑에 한글 자모 같은 얼룩 — 한글 HTR 적응의 흔적으로 보인다). 한글 복원 CER 은 Flux2 가 4배 낫다.
+- ★ 측정 규약: 원본 `htr_cer --vae-only` 는 폭 > 768 줄을 768 로 가로 압축해 Eruku VAE 를 0.044 로 깎는다(긴 줄 157개). 위 표는 ≤768 은 학습처럼
+  768 흰 패딩, > 768 은 압축 없이 8 배수 패딩.
+- Eruku **생성** CER(0.010)이 자기 VAE 왕복(0.023)보다 낮다 — 왕복은 임의 폰트 모양을 1ch latent 에 담아야 하지만, 생성은 VAE 가 잘 디코딩하는
+  정형 글자를 고르면 된다. 저용량·정규화형 VAE 가 Eruku 의 "정확하지만 평균화된 필체"(HWD↑)를, 고용량·항등형 VAE 가 InkSpire 의 "모양·농담 보존"
+  (HWD↓)을 만든다. **InkSpire 의 글자 정확도 문제는 VAE 가 아니라 transformer 쪽이다.**
+
+### InkSpire 획이 끊기고 흐린(날아가는) 이유 — ref 농도를 베낀다
+
+실손글씨·IAM 은 가는 펜 획이라 잉크 높이 48px 로 줄이면 1~2px 회색 선이 된다. 캔버스에 놓인 ref 의 획 평균 밝기: 폰트 33~46 / 실손글씨 137~142 /
+IAM 114~156 (진한 획(<128) 비율 84~89% / 39~44% / 15~61%). 학습 ref 는 잉크 농도 0.75~1 의 진한 획뿐이었다.
+같은 hw_line 교차 20장에서 ref 획만 3×3 erode 로 굵고 진하게 하면 **출력도 그대로 진해진다** — 출력 획 평균 밝기 151 → 64, 진한 획 24% → 81%.
+CER 은 0.246 → 0.285 로 그대로 — **흐림(농도)과 글자 오류(모양)는 별개 문제다.**
+
+![ref 농도](img_inkspire_io/20_stroke_darkness.png)
+
+표본 3개 × [원본 ref | 생성 | 진하게 한 ref | 생성].
+
+## 12. 결론
 
 **Eruku 는 원본 권장 추론(cfg 1.5, 새 디코딩, 공식 ref 크롭)으로 비교해야 한다(§10 첫 표).** 그 기준으로:
 

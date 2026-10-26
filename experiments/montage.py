@@ -56,6 +56,7 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--cell-w", type=int, default=560)
     ap.add_argument("--cell-h", type=int, default=60)
+    ap.add_argument("--gt", default=None, help="GT 열 이미지 폴더(기본 첫 run 의 gt/) — IAM 은 실제 라인 폴더")
     ap.add_argument("--show-ctx", action="store_true", help="덤프에 ctx/ 가 있으면 보강 줄을 생성 위에 같이 보인다(셀 높이 2배 권장)")
     ap.add_argument("--out", default=str(HERE / "_debug/montage.png"))
     a = ap.parse_args()
@@ -63,11 +64,14 @@ def main():
     runs = [(r.split("=", 1)[0], Path(r.split("=", 1)[1])) for r in a.runs]
     plan = json.loads(Path(a.plan).read_text(encoding="utf-8"))
     rows = {f"{r['i']:05d}.png": r for r in plan["rows"]}
-    preds = [json.loads((d / "gen/ppocr_preds.json").read_text(encoding="utf-8")) for _, d in runs]
+    # 판독 결과가 없는 덤프(IAM 등)는 None — CER 라벨·정렬 없이 그림만
+    preds = [json.loads((d / "gen/ppocr_preds.json").read_text(encoding="utf-8")) if (d / "gen/ppocr_preds.json").exists()
+             else None for _, d in runs]
     names = [n for n in rows if all((d / "gen" / n).exists() for _, d in runs)]
     if a.font:
         names = [n for n in names if a.font.lower() in Path(rows[n]["font"]).stem.lower()]
-    cer = {n: [lev(rows[n]["text"], p.get(n, "")) / max(1, len(rows[n]["text"])) for p in preds] for n in names}
+    cer = {n: [lev(rows[n]["text"], p.get(n, "")) / max(1, len(rows[n]["text"])) if p is not None else float("nan")
+               for p in preds] for n in names}
     if a.pick == "random":
         random.Random(a.seed).shuffle(names)
     else:
@@ -94,7 +98,8 @@ def main():
         elif fp not in ref_cache:   # 모델이 받은 것과 같은 64px ref
             t = style_tensor(render_in_font(fp, plan["style_ref_text"]))
             ref_cache[fp] = ((t[0].numpy() + 1) * 127.5).clip(0, 255).astype(np.uint8)
-        gt = np.array(Image.open(runs[0][1] / "gt" / n).convert("L")) if (runs[0][1] / "gt" / n).exists() \
+        gdir = Path(a.gt) if a.gt else runs[0][1] / "gt"
+        gt = np.array(Image.open(gdir / n).convert("L")) if (gdir / n).exists() \
             else render_in_font(fp, r["text"])
         cells = [cell(ref_cache[fp], f"{n[:5]} {fp.stem[:18]}", W // 2, H),
                  cell(gt, "GT  " + r["text"][:40], W, H)]
@@ -106,13 +111,13 @@ def main():
                 Wc = max(cx.shape[1], g.shape[1])
                 g = np.vstack([np.pad(cx, ((0, 0), (0, Wc - cx.shape[1])), constant_values=255), np.full((6, Wc), 160, np.uint8),
                                np.pad(g, ((0, 0), (0, Wc - g.shape[1])), constant_values=255)])
-            cells.append(cell(g, f"{lab} {c:.2f}  {p.get(n, '')[:40]}", W, H, highlight=c > 0))
+            cells.append(cell(g, f"{lab} {c:.2f}  {p.get(n, '')[:40]}" if p is not None else lab, W, H, highlight=c > 0))
         grid.append(np.hstack(cells))
     Wmax = max(g.shape[1] for g in grid)
     img = np.vstack([np.pad(g, ((0, 0), (0, Wmax - g.shape[1])), constant_values=255) for g in grid])
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)
     Image.fromarray(img).save(a.out)
-    mean = np.mean([cer[n] for n in names], 0)
+    mean = np.nanmean([cer[n] for n in names], 0) if any(p is not None for p in preds) else [float("nan")] * len(runs)
     print(f"{len(names)}행 → {a.out}  (이 행들의 평균 CER: " + ", ".join(f"{l} {m:.3f}" for (l, _), m in zip(runs, mean)) + ")")
 
 
