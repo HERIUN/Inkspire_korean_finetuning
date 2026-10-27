@@ -1,13 +1,13 @@
 # InkSpire 한글 재현
 
-[![🤗 Model](https://img.shields.io/badge/🤗%20Model-HERIUN%2Finkspire__korean-FFD21E)](https://huggingface.co/HERIUN/inkspire_korean) [![🤗 Demo](https://img.shields.io/badge/🤗%20Demo-Try%20it%20on%20Spaces-0B93F6)](https://huggingface.co/spaces/HERIUN/inkspire_korean_demo)
+[![🤗 Model](https://img.shields.io/badge/🤗%20Model-HERIUN%2Finkspire__korean-FFD21E)](https://huggingface.co/HERIUN/inkspire_korean) [![🤗 Demo](https://img.shields.io/badge/🤗%20Demo-Try%20it%20on%20Spaces-0B93F6)](https://huggingface.co/spaces/HERIUN/eruku_korean_demo)
 
 논문 *Learning to Generate Stylized Handwritten Text via a Unified Representation of Style,
 Content, and Noise* (Wang et al., ICLR 2026, OpenReview `FBPuLChGNX`) 의 한글 재현 구현.
 코드 미공개라 논문만 보고 구현했다. [Eruku_korean_finetuning](https://github.com/HERIUN/Eruku_korean_finetuning) 에서 분리해 나왔다.
 
 - 설계·이슈·측정값: [`docs/inkspire.md`](docs/inkspire.md)
-- HF 릴리즈(LoRA + Space): `tools/hf_release.py {model,space} [--push]` — 베이스는 gated·FLUX Kommunity(비상업)라 재배포 안 함, Space 는 secret `HF_TOKEN` 으로 받는다
+- HF 릴리즈(LoRA + Space): `tools/hf_release.py {model,space} [--push]` — 베이스는 gated·FLUX Kommunity(비상업)라 재배포 안 함, Space(Eruku 데모에 모델 선택으로 합침) 는 secret `HF_TOKEN` 으로 받는다
 
 ## Eruku 와 비교 (w/ T_s — ref 전사를 줄 때)
 
