@@ -1,7 +1,7 @@
 """HF 릴리즈 — 최종 LoRA 를 모델 repo 로, gradio 데모를 Space 로 발행 (Eruku_korean_finetuning tools/hf_upload.py 대응).
 
     HERIUN/inkspire_korean        LoRA(pytorch_lora_weights.safetensors) + 빈 프롬프트 캐시 + FLUX Kommunity 라이선스·고지
-    HERIUN/inkspire_korean_demo   Space(ZeroGPU) — 이 repo 의 추론 코드 최소 묶음 + app.py
+    HERIUN/eruku_korean_demo      Space(ZeroGPU) — Eruku 데모에 InkSpire 를 합쳐 모델 선택(추론 코드 최소 묶음 + app.py)
 
 베이스(black-forest-labs/flux-3-image-klein-base)는 gated·FLUX Kommunity(비상업)라 **재배포하지 않는다** —
 Space 는 실행 때 받으므로 Space secret HF_TOKEN(베이스 약관 수락한 계정)이 필요하다.
@@ -15,11 +15,12 @@ import shutil
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parents[1]
-MODEL_REPO, SPACE_REPO = "HERIUN/inkspire_korean", "HERIUN/inkspire_korean_demo"
+MODEL_REPO = "HERIUN/inkspire_korean"
+SPACE_REPO = "HERIUN/eruku_korean_demo"   # Eruku 데모에 합쳤다(모델 선택). 단독 Space 는 비PRO 계정에서 ZeroGPU 배정 실패
 BASE = "black-forest-labs/flux-3-image-klein-base"
 LORA = HERE / "finetune_runs/inkspire_klein_p512/lora_step_013000/pytorch_lora_weights.safetensors"
 EMPTY = HERE / "model_zoo/klein_empty_prompt.pt"
-ERUKU_EXAMPLES = "HERIUN/eruku_korean_demo"   # 같은 예시로 두 데모를 나란히 비교할 수 있게 재사용
+ERUKU_EXAMPLES = "HERIUN/eruku_korean_demo"   # 기존 Eruku 데모의 예시 그대로
 # Space 가 import 하는 최소 코드(InkSpireGen 경로). 폰트는 Xc 표준폰트 하나.
 SPACE_CODE = ["configs/__init__.py", "configs/loader.py", "custom_datasets/__init__.py",
               "custom_datasets/korean/__init__.py", "custom_datasets/korean/page.py",
@@ -49,7 +50,7 @@ tags: [lora, handwriting, handwriting-generation, korean, inkspire, flux]
 **FLUX.3-Image-Klein-Base + LoRA r32 (71.2M), 13k step.** 스타일 손글씨 한 줄(+ 그 전사)을 보고 같은 필체로 새 문장을 쓴다.
 
 - 학습 코드·실험 기록: https://github.com/HERIUN/Inkspire_korean_finetuning
-- 데모: https://huggingface.co/spaces/{SPACE_REPO}
+- 데모(Eruku 와 모델 선택): https://huggingface.co/spaces/{SPACE_REPO}
 - 같은 데이터로 학습한 자기회귀 모델 비교 대상: [HERIUN/eruku_korean](https://huggingface.co/HERIUN/eruku_korean)
 
 ## 입력 규약
@@ -97,33 +98,48 @@ out = g.gen_lines(ref, "스타일 이미지의 전사", ["생성할 문장"], se
 """
 
 SPACE_README = f"""---
-title: InkSpire Korean 한글 손글씨 생성
-emoji: ✒️
-colorFrom: gray
-colorTo: indigo
+title: Eruku · InkSpire Korean 한글 손글씨 생성
+emoji: 🖋️
+colorFrom: indigo
+colorTo: pink
 sdk: gradio
 sdk_version: 6.20.0
 python_version: "3.12.12"   # ZeroGPU 지원: 3.12.12 · 3.10.13 만 (diffusers 0.42 Flux3 는 ≥3.11)
 app_file: app.py
 pinned: false
 license: other
-short_description: 손글씨 한 줄 + 전사로 같은 필체의 한글 문장 생성 (FLUX.3 Klein LoRA)
+short_description: 스타일 손글씨로 한글 문장 생성 — Eruku(자기회귀) / InkSpire(FLUX.3 LoRA) 선택
 models:
+- HERIUN/eruku_korean
+- HERIUN/emuru_vae_korean
+- blowing-up-groundhogs/eruku
+- blowing-up-groundhogs/emuru_vae
 - {MODEL_REPO}
 - {BASE}
 ---
 
-# InkSpire Korean
+# Eruku · InkSpire Korean — 한글 손글씨 스타일 생성
 
-[{MODEL_REPO}](https://huggingface.co/{MODEL_REPO}) 데모 — 학습 코드 https://github.com/HERIUN/Inkspire_korean_finetuning
+같은 입력(스타일 이미지 + 전사 + 생성 문구)으로 두 모델을 골라 비교하는 데모.
 
-베이스 모델 {BASE} 는 FLUX Kommunity License(비상업) 이며, 이 Space 는 그 약관을 수락한 계정 토큰(secret `HF_TOKEN`)으로 베이스를 받는다.
-생성 이미지는 AI 로 만든 것이다.
+| 모델 | repo | 학습 코드 |
+|---|---|---|
+| Eruku Korean (자기회귀, T5 + 한글 적응 VAE) | [HERIUN/eruku_korean](https://huggingface.co/HERIUN/eruku_korean) | https://github.com/HERIUN/Eruku_korean_finetuning |
+| InkSpire Korean (확산, FLUX.3-Image-Klein-Base + LoRA) | [{MODEL_REPO}](https://huggingface.co/{MODEL_REPO}) | https://github.com/HERIUN/Inkspire_korean_finetuning |
+
+글자 정확도는 Eruku, 필체 형태(HWD)와 지저분한 스캔 ref 는 InkSpire 쪽이 낫다. InkSpire 는 스타일 전사가 필수다.
+
+라이선스: Eruku 는 Apache-2.0. InkSpire 의 베이스 {BASE} 는 FLUX Kommunity License(비상업)이며
+그 약관을 수락한 계정 토큰(secret `HF_TOKEN`)으로 실행 때 받는다. 생성 이미지는 AI 로 만든 것이다.
+
+**하드웨어**: ZeroGPU.
 """
 
-APP = r'''"""InkSpire Korean — 한글 손글씨 스타일 생성 데모 (FLUX.3-Image-Klein-Base + LoRA)."""
+APP = r'''"""Eruku · InkSpire Korean — 한글 손글씨 스타일 생성 데모 (모델 선택).
+Eruku: HERIUN/eruku_korean (자기회귀) / InkSpire: HERIUN/inkspire_korean (FLUX.3-Image-Klein-Base + LoRA)
+"""
 import os
-os.environ.setdefault("GRADIO_SSR_MODE", "0")
+os.environ.setdefault("GRADIO_SSR_MODE", "0")  # gradio SSR 렌더 버그(unhashable dict) 회피
 
 import json
 import shutil
@@ -131,29 +147,43 @@ from pathlib import Path
 
 import gradio as gr
 import numpy as np
-from huggingface_hub import hf_hub_download, snapshot_download
+import torch
+from huggingface_hub import snapshot_download
 from PIL import Image
 
 try:
     import spaces
     GPU = spaces.GPU
-except Exception:
+except Exception:  # spaces 없거나 ZeroGPU 아님
     def GPU(fn=None, **_):
         return fn if fn else (lambda f: f)
 
-MODEL_ID = "%(model)s"
 HERE = Path(__file__).resolve().parent
-lora = snapshot_download(MODEL_ID)
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+ERUKU_ID, INKSPIRE_ID = "HERIUN/eruku_korean", "%(model)s"
+
+# ── InkSpire: ZeroGPU 권장대로 모듈 레벨에서 cuda 로 올린다(실제 GPU 는 @GPU 안에서 붙는다)
+lora = snapshot_download(INKSPIRE_ID)
 (HERE / "model_zoo").mkdir(exist_ok=True)
-shutil.copy(Path(lora) / "klein_empty_prompt.pt", HERE / "model_zoo/klein_empty_prompt.pt")   # models.inkspire_klein.EMPTY_CACHE
-
+if not (HERE / "model_zoo/klein_empty_prompt.pt").exists():   # models.inkspire_klein.EMPTY_CACHE
+    shutil.copyfile(Path(lora) / "klein_empty_prompt.pt", HERE / "model_zoo/klein_empty_prompt.pt")
 from infer.inkspire import InkSpireGen   # noqa: E402
+inkspire = InkSpireGen(lora, device="cuda")
 
-model = InkSpireGen(lora, device="cuda")   # ZeroGPU: import 때 cuda 로 올려도 된다(실제 GPU 는 @GPU 안에서 붙는다)
+# ── Eruku: 기존 데모와 같은 지연 로드
+eruku = None
+
+
+def load_eruku():
+    global eruku
+    if eruku is None:
+        from transformers import AutoModel
+        eruku = AutoModel.from_pretrained(ERUKU_ID, trust_remote_code=True).eval()
+    return eruku
 
 
 def ink_bbox_crop(a, thr=180, bthr=215, dens_col=0.03, dens_row=0.006, solid=0.55, pad=4):
-    """스캔 여백·테두리 제거(Eruku 릴리즈 ink_bbox_crop 과 같은 값, 실손글씨 평가 기본)."""
+    """스캔 여백·테두리 제거(Eruku 릴리즈 ink_bbox_crop 과 같은 값) — InkSpire 경로용."""
     bink = a < bthr
     y0, y1, x0, x1 = 0, a.shape[0], 0, a.shape[1]
     while y0 < y1 and bink[y0].mean() > solid: y0 += 1
@@ -173,64 +203,143 @@ def vstack(arrs, gap=8):
     return np.vstack([np.pad(a, ((0, gap), (0, W - a.shape[1])), constant_values=255) for a in arrs])
 
 
-@GPU(duration=90)
-def generate(style_image, style_text, gen_text, steps, seed, bbox_crop):
-    lines = [s.strip() for s in (gen_text or "").splitlines() if s.strip()]
-    if style_image is None:
-        return None, "❌ 스타일 이미지를 올리세요"
-    if not (style_text or "").strip():
-        return None, "❌ 스타일 전사를 적으세요 — InkSpire 는 ref 전사가 필수입니다(없으면 붕괴)"
-    if not lines:
-        return None, "❌ 생성할 텍스트를 입력하세요"
+def run_eruku(style_image, style_text, lines, cfg_scale, bbox_crop):
+    m = load_eruku()
+    m.to(DEVICE)
+    # ★ 먼저 h=64 로 줄인다(모델 내부 ink bbox 크롭은 그 축소본에 적용) — 여백 큰 입력 6장 CER 0.131 vs 원본 그대로 0.202
+    style_img = style_image.convert("RGB")
+    w, h = style_img.size
+    style_img = style_img.resize((max(int(64 * w / h), 64), 64), Image.LANCZOS)
+    outs = []
+    with torch.inference_mode():
+        for t in lines:
+            r = m.generate_handwriting(style_image=style_img, gen_text=t, style_text=style_text or "",
+                                       cfg_scale=float(cfg_scale), max_new_tokens=512, bbox_crop=bool(bbox_crop))
+            outs.append(np.asarray(r.convert("L")))
+    return outs
+
+
+def run_inkspire(style_image, style_text, lines, steps, seed, bbox_crop):
     ref = np.asarray(style_image.convert("L"))
     if bbox_crop:
         ref = ink_bbox_crop(ref)
-    model.steps = int(steps)
-    outs = model.gen_lines(ref, style_text.strip(), lines[:8], seed=int(seed))
-    return Image.fromarray(vstack(outs)), f"✅ {len(outs)}줄 생성" + (" (앞 8줄만)" if len(lines) > 8 else "")
+    inkspire.steps = int(steps)
+    return inkspire.gen_lines(ref, style_text.strip(), lines, seed=int(seed))
 
 
-def examples():
+@GPU(duration=90)
+def generate(model_name, style_image, style_text, gen_text, cfg_scale, steps, seed, bbox_crop):
+    lines = [s.strip() for s in (gen_text or "").splitlines() if s.strip()][:8]
+    if style_image is None:
+        return None, "❌ 스타일 이미지를 업로드하세요"
+    if not lines:
+        return None, "❌ 생성할 텍스트를 입력하세요"
+    if isinstance(style_image, np.ndarray):
+        style_image = Image.fromarray(style_image)
+    try:
+        if model_name == "InkSpire":
+            if not (style_text or "").strip():
+                return None, "❌ InkSpire 는 스타일 전사가 필수입니다(없으면 붕괴)"
+            outs = run_inkspire(style_image, style_text, lines, steps, seed, bbox_crop)
+        else:
+            outs = run_eruku(style_image, style_text, lines, cfg_scale, bbox_crop)
+        return Image.fromarray(vstack(outs)), f"✅ {model_name} · {len(outs)}줄 생성"
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return None, f"❌ 오류: {e}"
+
+
+def load_examples():
     f = HERE / "examples/samples.json"
     if not f.exists():
         return None
-    return [[s["style_image"], s["style_text"], s["gen_text"]] for s in json.loads(f.read_text(encoding="utf-8"))
-            if (HERE / s["style_image"]).exists()] or None
+    return [[s["style_image"], s.get("style_text", ""), s.get("gen_text", "안녕하세요")]
+            for s in json.loads(f.read_text(encoding="utf-8")) if (HERE / s["style_image"]).exists()] or None
 
 
-with gr.Blocks(title="InkSpire Korean — 한글 손글씨 생성") as demo:
+custom_css = """
+.gradio-container { max-width: 1100px !important; }
+footer { visibility: hidden; }
+"""
+
+with gr.Blocks(css=custom_css, title="Eruku · InkSpire Korean — 한글 손글씨 생성") as demo:
     gr.HTML("""
-    <div style="text-align:center">
-      <h1>✒️ InkSpire Korean</h1>
-      <h3 style="color:#888;font-weight:normal">손글씨 한 줄 + 그 전사 → 같은 필체의 한글 문장</h3>
-      <p><a href="https://huggingface.co/%(model)s" target="_blank">🤗 Model</a> &nbsp;|&nbsp;
-         <a href="https://github.com/HERIUN/Inkspire_korean_finetuning" target="_blank">💻 학습 코드</a> &nbsp;|&nbsp;
-         <a href="https://huggingface.co/spaces/HERIUN/eruku_korean_demo" target="_blank">비교: Eruku Korean 데모</a></p>
-    </div>""")
+    <div style="text-align:center; margin-bottom:16px;">
+      <h1>🖋️ Eruku · InkSpire Korean</h1>
+      <h3 style="color:#888; font-weight:normal;">한글 손글씨 스타일 생성 — 모델을 골라 비교하세요</h3>
+      <p>
+        <a href="https://huggingface.co/HERIUN/eruku_korean" target="_blank">🤗 Eruku</a> &nbsp;|&nbsp;
+        <a href="https://huggingface.co/HERIUN/emuru_vae_korean" target="_blank">🤗 한글 VAE</a> &nbsp;|&nbsp;
+        <a href="https://huggingface.co/%(model)s" target="_blank">🤗 InkSpire</a> &nbsp;|&nbsp;
+        <a href="https://github.com/HERIUN/Eruku_korean_finetuning" target="_blank">💻 Eruku 코드</a> &nbsp;|&nbsp;
+        <a href="https://github.com/HERIUN/Inkspire_korean_finetuning" target="_blank">💻 InkSpire 코드</a>
+      </p>
+    </div>
+    """)
+
     with gr.Row():
-        with gr.Column():
-            style_image = gr.Image(label="📷 스타일 이미지 (손글씨 한 줄)", type="pil", height=200)
-            style_text = gr.Textbox(label="📝 스타일 전사 (필수)", placeholder="스타일 이미지에 적힌 글자 그대로", lines=1)
-            gen_text = gr.Textbox(label="✍️ 생성할 텍스트 (줄마다 한 줄씩, 최대 8줄)", lines=3, value="한국어 손글씨 생성 테스트")
+        with gr.Column(scale=1):
+            model_radio = gr.Radio(["Eruku", "InkSpire"], value="Eruku", label="🧠 모델",
+                                   info="Eruku = 글자 정확도↑ · 전사 없어도 동작 / InkSpire = 필체 형태(HWD)↑ · 전사 필수")
+            style_image_input = gr.Image(label="📷 스타일 이미지 (손글씨 참조, 한 줄)", type="pil", height=200)
+            style_text_input = gr.Textbox(label="📝 스타일 전사 (Eruku 선택 · InkSpire 필수)",
+                                          placeholder="스타일 이미지에 적힌 글자 그대로", lines=2)
+            gen_text_input = gr.Textbox(label="✍️ 생성할 텍스트 (줄마다 한 줄씩, 최대 8줄)", lines=3,
+                                        value="한국어 손글씨 생성 테스트")
+            cfg_slider = gr.Slider(label="🎚️ CFG scale (Eruku) — 1.0 = 원문 충실도 최고, 1.5~2.0 = 스타일 강조",
+                                   minimum=1.0, maximum=3.0, step=0.1, value=1.5)
             with gr.Row():
-                steps = gr.Slider(label="steps", minimum=10, maximum=50, step=1, value=20)
-                seed = gr.Number(label="seed", value=0, precision=0)
-            bbox = gr.Checkbox(label="✂️ 스캔 여백·테두리 자동 제거", value=True)
-            btn = gr.Button("🚀 생성", variant="primary", size="lg")
-        with gr.Column():
-            out = gr.Image(label="🎨 생성 결과", type="pil")
-            status = gr.Textbox(label="상태", interactive=False)
-    ex = examples()
-    if ex:
-        gr.Examples(examples=ex, inputs=[style_image, style_text, gen_text], label="📚 예시 (Eruku 데모와 같은 예시)")
-    btn.click(generate, [style_image, style_text, gen_text, steps, seed, bbox], [out, status])
+                steps_slider = gr.Slider(label="steps (InkSpire)", minimum=10, maximum=50, step=1, value=20)
+                seed_input = gr.Number(label="seed (InkSpire)", value=0, precision=0)
+            bbox_checkbox = gr.Checkbox(label="✂️ 스타일 이미지 여백 자동 제거 (스캔 사진이면 켜두세요)", value=True)
+            generate_btn = gr.Button("🚀 생성", variant="primary", size="lg")
+
+        with gr.Column(scale=1):
+            output_image = gr.Image(label="🎨 생성 결과", type="pil")
+            status_text = gr.Textbox(label="상태", lines=1, interactive=False)
+
+    examples = load_examples()
+    if examples:
+        gr.Examples(examples=examples, inputs=[style_image_input, style_text_input, gen_text_input],
+                    label="📚 예시 스타일", examples_per_page=4, cache_examples=False)
+
+    inputs = [model_radio, style_image_input, style_text_input, gen_text_input, cfg_slider, steps_slider,
+              seed_input, bbox_checkbox]
+    for trigger in (generate_btn.click, gen_text_input.submit):
+        trigger(fn=generate, inputs=inputs, outputs=[output_image, status_text])
+
     gr.Markdown("""
 ---
-- **스타일 전사는 필수**입니다. 글자 위치 대응표(Xc)를 전사로 만들기 때문에, 틀리게 적으면 필체가 어긋납니다.
-- 성능(ref 전사를 줄 때, PP-OCRv6 CER): 한글 폰트 held-out **0.023**(HWD 0.93) / 실손글씨 문장 0.246 / 서식 칸 0.417.
-  글자 정확도는 Eruku 가, 필체 형태(HWD)와 지저분한 스캔 ref 는 InkSpire 가 낫습니다.
-- 남은 오류는 시드마다 다른 획 오류입니다 — 이상하면 seed 를 바꿔 보세요.
-- 베이스: FLUX.3-Image-Klein-Base (FLUX Kommunity License, 비상업). 생성 이미지는 AI 가 만든 것입니다.
+### 📖 사용법
+1. **모델 선택** → **스타일 이미지 업로드**(따라 할 손글씨 **한 줄**, 크기는 알아서 맞춥니다)
+2. **스타일 전사** — Eruku 는 선택(넣으면 정확도↑), **InkSpire 는 필수**(글자 위치 대응표를 전사로 만듭니다)
+3. **생성할 텍스트** → 생성. 예제 앞 3개는 실제 사람 손글씨 스캔, 나머지는 폰트 렌더입니다.
+
+### 📊 비교 (ref 전사를 줄 때, PP-OCRv6 CER↓)
+| 평가 | Eruku | InkSpire |
+|---|---|---|
+| 한글 폰트 held-out 16종 (n=300) — CER / HWD↓ | **0.010** / 1.12 | 0.023 / **0.93** |
+| 실손글씨 문장 교차 생성 (n=20) | **0.014** | 0.246 |
+| 실손글씨 서식 칸 (n=286) | 0.771 (백지·폭주) | **0.417** |
+
+- **Eruku**: 한글 적응 VAE([HERIUN/emuru_vae_korean](https://huggingface.co/HERIUN/emuru_vae_korean))와 짝. 여백 있는 스캔은 «여백 자동 제거» 를 반드시 켜세요
+  (실측 CER 0.119 켬 vs 1.571 끔). 짧은 문장이 가장 어렵고, 잉크를 선명한 검정으로 스냅합니다.
+- **InkSpire**: FLUX.3-Image-Klein-Base(FLUX Kommunity License, 비상업) + LoRA. 남은 오류는 시드마다 다른 획 오류라 이상하면 seed 를 바꿔 보세요.
+- 생성 이미지는 AI 가 만든 것입니다.
+
+### 인용 (base models)
+```bibtex
+@inproceedings{zaccagnino2026eruku,
+  title={Autoregressive Styled Text Image Generation, but Make it Reliable},
+  author={Zaccagnino, Carmine and Quattrini, Fabio and Pippi, Vittorio and Cascianelli, Silvia and Tonioni, Alessio and Cucchiara, Rita},
+  booktitle={WACV}, year={2026}
+}
+@inproceedings{wang2026inkspire,
+  title={Learning to Generate Stylized Handwritten Text via a Unified Representation of Style, Content, and Noise},
+  author={Wang et al.}, booktitle={ICLR}, year={2026}
+}
+```
 """)
 
 if __name__ == "__main__":
@@ -239,17 +348,20 @@ if __name__ == "__main__":
 
 REQUIREMENTS = """spaces
 torch
+torchvision
+transformers
 diffusers>=0.42
 peft>=0.18
-transformers
+einops
+pillow
+numpy
 accelerate
+sentencepiece
 safetensors
 huggingface_hub
 opencv-python-headless
 fonttools
 pyyaml
-pillow
-numpy
 """
 
 
@@ -281,10 +393,7 @@ def stage_space(out):
         shutil.copy(HERE / f, out / f)
     ex = Path(snapshot_download(ERUKU_EXAMPLES, repo_type="space", allow_patterns=["example_images/*", "examples/*"]))
     shutil.copytree(ex / "example_images", out / "example_images", dirs_exist_ok=True)
-    samples = json.loads((ex / "examples/samples.json").read_text(encoding="utf-8"))
-    samples = [s for s in samples if any("가" <= c <= "힣" for c in s["gen_text"])]   # 한글 전용 학습 — 영어 예시는 뺀다
-    (out / "examples").mkdir(exist_ok=True)
-    (out / "examples/samples.json").write_text(json.dumps(samples, ensure_ascii=False, indent=2), encoding="utf-8")
+    shutil.copytree(ex / "examples", out / "examples", dirs_exist_ok=True)
     (out / "app.py").write_text(APP % {"model": MODEL_REPO}, encoding="utf-8")
     (out / "requirements.txt").write_text(REQUIREMENTS, encoding="utf-8")
     (out / "README.md").write_text(SPACE_README, encoding="utf-8")
