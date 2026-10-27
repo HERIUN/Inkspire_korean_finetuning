@@ -77,16 +77,19 @@ def _ink_box(arr, th=250):
 
 class InkSpireGen:
     def __init__(self, lora_dir=None, layout_ckpt=None, device="cuda", steps=20, guidance=30.0,
-                 rape=True, ape=True, std_font=STD_FONT, trim_ref=True, degrade=0.0, tight_mask=False, ref_width=True):
+                 rape=True, ape=True, std_font=STD_FONT, trim_ref=True, degrade=0.0, tight_mask=False, ref_width=True, line_h=LINE_H, cfg=1.0):
         """lora_dir=None 이면 FLUX 를 안 올린다(prepare/--dry-run 전용). layout_ckpt=None → std layout.
         tight_mask: 마스크 = [ref 잉크 바닥 ↑16격자, 목표 상자 바닥+4 ↑16격자) — 캔버스도 거기서 끝난다.
           기본(False)은 y_cut = clip(목표 top−2, ref 바닥+1, TOP+PITCH), H = max(TOP+PITCH·(n+1), 상자 바닥+8).
         ref_width(기본 켬, 2026-10-22~): 목표 줄 상자의 x 를 ref 의 "손글씨 폭 / 표준폰트 폭" 비율로 늘이거나 줄인다(std layout 전용).
           끄면 목표 줄 폭·자간이 표준폰트 그대로라 출력이 GT 보다 ~23% 넓다(Eruku 7%) — HWD 의 큰 몫(EXPERIMENTS §9)."""
         self.device, self.steps, self.guidance, self.rape, self.ape = device, steps, guidance, rape, ape
+        self.cfg = cfg   # CFG(FLUX.3-Image-Klein-Base, --xc-drop 학습 LoRA 전용, v_u = Xc 빈 이미지). 1.0 = 끔
         self.trim_ref, self.degrade, self.tight_mask, self.ref_width = trim_ref, degrade, tight_mask, ref_width
         self.std_font_path = std_font          # ★ 학습(configs/inkspire.yaml data.std_font)과 같아야 한다
-        self.std_font = page._font(str(std_font), font_px(std_font, LINE_H))
+        # line_h: 표준폰트 '한글' 잉크 높이 기준(학습 U(40,80)). 줄 간격은 같은 비율(PITCH/LINE_H)로 늘린다
+        self.std_font = page._font(str(std_font), font_px(std_font, line_h))
+        self.pitch = int(round(PITCH * line_h / LINE_H))
         self.layout = None
         if layout_ckpt:
             from models.inkspire_layout import load_layout
@@ -118,7 +121,7 @@ class InkSpireGen:
             # ★ 이미지에서 글자를 직접 분할해 실제 bbox 를 주는 방식도 해봤으나 CER 0.20 → 0.61 로 폭망(2026-09-14).
             #   레이아웃 모델이 레퍼런스 토큰의 분산을 그대로 증폭한다 — 매끈한 근사값이 오히려 낫다.
             if text:
-                _, ch, bx = render_line(self.std_font, text, 4 * MAX_W, TOP + r * PITCH, LEFT)
+                _, ch, bx = render_line(self.std_font, text, 4 * MAX_W, TOP + r * self.pitch, LEFT)
                 if len(bx):
                     bx = bx.astype(np.float32)
                     x0, x1 = bx[:, 0].min(), bx[:, 2].max()
@@ -133,7 +136,7 @@ class InkSpireGen:
                     chars += ch; boxes.append(bx); line_id += [0] * len(ch); row += [r] * len(ch)
         k = len(vis) - 1
         for i, text in enumerate(lines):   # 타깃 토큰: std layout 을 초기값/기본값으로
-            _, ch, bx = render_line(self.std_font, text, 4 * MAX_W, TOP + (i + 1 + k) * PITCH, LEFT)
+            _, ch, bx = render_line(self.std_font, text, 4 * MAX_W, TOP + (i + 1 + k) * self.pitch, LEFT)
             bx = bx.astype(np.float32)
             bx[:, [0, 2]] = LEFT + (bx[:, [0, 2]] - LEFT) * sx
             chars += ch; boxes.append(bx); line_id += [i + 1] * len(ch); row += [-1] * len(ch)
@@ -153,7 +156,7 @@ class InkSpireGen:
                 sel = line_id == li
                 boxes[sel, 0::2] += LEFT - boxes[sel, 0].min()
             if not style_text:   # 무레퍼런스: Δy 기준(첫 줄 바닥)이 없으므로 둘째 줄을 ref 아래로 평행이동
-                boxes[:, [1, 3]] += (TOP + PITCH + b[1]) - boxes[line_id == 1, 1].min()
+                boxes[:, [1, 3]] += (TOP + self.pitch + b[1]) - boxes[line_id == 1, 1].min()
         tgt = line_id > 0
         # ★ ref 가 목표 줄보다 길면 캔버스 오른쪽에 "생성해야 할 빈 공간"이 생긴다(학습 패치는 글자로 꽉 참).
         #   남는 ref 꼬리를 잘라 캔버스를 목표 줄 폭에 맞춘다(ref 토큰도 같이 버림).
@@ -175,15 +178,15 @@ class InkSpireGen:
         if self.tight_mask and tgt.any():   # X y끝 ~ Xc y끝. 목표 아래 빈 종이(기본 방식 ~42px)를 생성시키지 않는다
             H = 16 * math.ceil((boxes[tgt, 3].max() + 4) / 16)
         else:
-            H = 16 * math.ceil(max(TOP + PITCH * (len(lines) + 1 + k), (boxes[:, 3].max() + 8) if len(boxes) else 0) / 16)
+            H = 16 * math.ceil(max(TOP + self.pitch * (len(lines) + 1 + k), (boxes[:, 3].max() + 8) if len(boxes) else 0) / 16)
         boxes = np.round(boxes).astype(np.int32)
 
         xc = render_content(chars, boxes, self.std_font_path, H, W)
         x = np.full((H, W), 255, np.uint8)
         for r, v in enumerate(vis):
-            y, w = y_ref + r * PITCH, min(v.shape[1], W - LEFT)
+            y, w = y_ref + r * self.pitch, min(v.shape[1], W - LEFT)
             x[y:y + ink_h, LEFT:LEFT + w] = np.minimum(x[y:y + ink_h, LEFT:LEFT + w], v[:, :w])
-        y_last = y_ref + k * PITCH                                     # 마지막 보이는 줄의 잉크 top
+        y_last = y_ref + k * self.pitch                                     # 마지막 보이는 줄의 잉크 top
         if self.degrade > 0:   # 학습 통계(블러·회색 종이)에 맞춰 캔버스를 일부러 더럽힌다 — 증강 불일치 검증용
             from custom_datasets.korean import fontset as G
             x = cv2.GaussianBlur(x, (3, 3), 0)
@@ -192,8 +195,8 @@ class InkSpireGen:
             # ponytail: 레이아웃 모델이 목표 줄을 y_cut 위로 끌어올리면 그 윗부분은 생성 못 한다(std layout 에선 안 생김)
             y_cut = 16 * math.ceil((y_last + ink_h + 1) / 16)
         else:
-            y_cut = int(np.clip(boxes[tgt, 1].min() - 2 if tgt.any() else TOP + (k + 1) * PITCH,
-                                y_last + ink_h + 1, TOP + (k + 1) * PITCH))
+            y_cut = int(np.clip(boxes[tgt, 1].min() - 2 if tgt.any() else TOP + (k + 1) * self.pitch,
+                                y_last + ink_h + 1, TOP + (k + 1) * self.pitch))
         mask = np.zeros((H, W), np.uint8); mask[y_cut:] = 1
         return {"x": x, "xc": xc, "mask": mask, "chars": chars, "boxes": boxes, "line_id": line_id,
                 "ref_w": Wr, "y_cut": y_cut, "k": k}
@@ -204,7 +207,7 @@ class InkSpireGen:
         if sel.any():
             y0, y1 = int(c["boxes"][sel, 1].min()), int(c["boxes"][sel, 3].max())
         else:
-            y0, y1 = TOP + (i + 1 + c["k"]) * PITCH, TOP + (i + 2 + c["k"]) * PITCH
+            y0, y1 = TOP + (i + 1 + c["k"]) * self.pitch, TOP + (i + 2 + c["k"]) * self.pitch
         y0, y1 = max(0, y0 - 4), min(out.shape[0], y1 + 4)
         strip = out[y0:y1]
         ib = _ink_box(strip)
@@ -221,7 +224,8 @@ class InkSpireGen:
         t = lambda a: torch.from_numpy(a.astype(np.float32) / 127.5 - 1.0)[None, None].to(dev)
         m = torch.from_numpy(c["mask"].astype(np.float32))[None, None].to(dev)
         x_hat = self.M.generate(self.tr, self.vae, t(c["x"]), t(c["xc"]), m, self.cache, steps=self.steps,
-                         guidance=self.guidance, seed=seed, rape=self.rape, ape=self.ape)
+                         guidance=self.guidance, seed=seed, rape=self.rape, ape=self.ape,
+                         **({"cfg": self.cfg} if self.cfg != 1.0 else {}))
         out = ((x_hat[0, 0].cpu().numpy() + 1) * 127.5).clip(0, 255).astype(np.uint8)
         return [self._crop_line(out, c, i) for i in range(len(lines))]
 

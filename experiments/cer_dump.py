@@ -83,7 +83,7 @@ def gen(a):
     for k, r in enumerate(p["rows"]):
         name = f"{r['i']:05d}.png"
         fp = Path(r["font"])
-        seed = p["seed"] * 1_000_003 + r["i"]
+        seed = p["seed"] * 1_000_003 + r["i"] + a.seed_offset
         if a.ctx:
             ref = u8(style_tensor(render_in_font(fp, sref)))
             ct = ctx_text(a.ctx, sref, r["text"])
@@ -130,6 +130,7 @@ if __name__ == "__main__":
     ap.add_argument("--style-text", choices=["ref", "none", "target", "ocr"], default="ref",
                     help="Xc 첫 줄에 줄 전사: ref=실제 ref 전사 / none=빈칸 / target=목표 텍스트(전사 모를 때 대용) / ocr=ref 를 PP-OCR 로 읽은 것(ref 모드+ppocr_rec 먼저)")
     ap.add_argument("--ctx", choices=["fixed", "adapt"], default=None, help="ref 보강 줄(docstring). --style-text ref 전용")
+    ap.add_argument("--seed-offset", type=int, default=0, help="표본 시드에 더한다 — 오류가 시드마다 같은 글자인지 보는 용도")
     ap.add_argument("--ctx-src", choices=["oracle", "boot"], default="boot")
     a = ap.parse_args()
     {"plan": plan, "ref": ref, "gen": gen}[a.mode](a)

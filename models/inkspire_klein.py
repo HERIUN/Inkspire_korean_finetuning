@@ -160,9 +160,18 @@ def cfm_loss(transformer, inp, cache, guidance=None):
     return (err * m).sum() / m.sum().clamp(min=1)
 
 
+def xc_uncond(xc, mask=None):
+    """무조건부 Xc = **빈(흰) 이미지** — ref 전사·목표 글자 모두 없음. Eruku text_dropout(텍스트 전체 → uncond_embedding)과 같다.
+    학습 `--xc-drop p` 가 이 확률로 이 입력을 주고, 추론 `cfg` 가 무조건부 예측 v_u 로 쓴다.
+    ★ 2026-10-27 전(finetune_runs/inkspire_klein_xcdrop)은 생성 영역만 비웠다 — 그 LoRA 와는 규약이 다르다."""
+    return torch.ones_like(xc)
+
+
 @torch.no_grad()
-def generate(transformer, vae, x, xc, mask, cache, steps=20, guidance=None, seed=0, rape=None, ape=None):
-    """Euler ODE → x·(1−mask) + gen·mask, [B,1,H,W]∈[-1,1]. 비마스크 토큰은 매 step GT 노이즈 버전으로 고정."""
+def generate(transformer, vae, x, xc, mask, cache, steps=20, guidance=None, seed=0, rape=None, ape=None, cfg=1.0):
+    """Euler ODE → x·(1−mask) + gen·mask, [B,1,H,W]∈[-1,1]. 비마스크 토큰은 매 step GT 노이즈 버전으로 고정.
+    cfg ≠ 1: CFG — v = v_u + cfg·(v_c − v_u), v_u 는 xc_uncond(Xc 전체 빈 이미지) 조건. 조건/무조건을 한 배치로.
+      `--xc-drop` 으로 학습한 LoRA 에서만 의미가 있다(아니면 v_u 가 분포 밖)."""
     inp = build_inputs(x, xc, mask, vae)
     x0, keep = inp["x0_packed"], ~inp["loss_mask"][..., None]
     B = x0.shape[0]
@@ -172,8 +181,14 @@ def generate(transformer, vae, x, xc, mask, cache, steps=20, guidance=None, seed
     g = torch.Generator(device=x0.device).manual_seed(seed)
     z = torch.randn(x0.shape, generator=g, device=x0.device, dtype=torch.float32)
     lat = z.clone()
+    if cfg != 1.0:
+        inp2 = dict(inp, cond_packed=torch.cat([inp["cond_packed"], build_inputs(x, xc_uncond(xc, mask), mask, vae)["cond_packed"]]))
     for i in range(steps):
-        v = _pred(transformer, lat, inp, sig[i].expand(B), cache).float()
+        if cfg != 1.0:
+            vc, vu = _pred(transformer, torch.cat([lat, lat]), inp2, sig[i].expand(2 * B), cache).float().chunk(2)
+            v = vu + cfg * (vc - vu)
+        else:
+            v = _pred(transformer, lat, inp, sig[i].expand(B), cache).float()
         lat = lat + (sig[i + 1] - sig[i]) * v
         lat = torch.where(keep, (1 - sig[i + 1]) * x0 + sig[i + 1] * z, lat)
     gen = _dec(vae, _unpack(lat, *inp["hw"])).clamp(-1, 1)
@@ -236,6 +251,11 @@ def _smoke(device):
     # (5) generate: shape · 비마스크 보존
     out = generate(tr, vae, x, xc, mask, cache, steps=2)
     assert out.shape == x.shape and torch.equal(out[mask == 0], x[mask == 0])
+    # (5b) 내용 CFG: cfg=1 은 기본과 같고, cfg≠1 은 비마스크 보존·다른 출력. xc_uncond 는 생성 영역만 비운다
+    assert torch.equal(generate(tr, vae, x, xc, mask, cache, steps=2, cfg=1.0), out)
+    out2 = generate(tr, vae, x, xc, mask, cache, steps=2, cfg=2.0)
+    assert torch.equal(out2[mask == 0], x[mask == 0]) and not torch.equal(out2, out)
+    assert (xc_uncond(xc, mask) == 1).all()
     # (6) save → load 왕복
     with tempfile.TemporaryDirectory() as d:
         save_lora(tr, d)

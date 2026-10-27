@@ -77,6 +77,10 @@ def make_parser():
     p.add_argument("--mask-mode", choices=["rand", "top"], default="rand")
     p.add_argument("--exclude-fonts", nargs="*", default=None)
     p.add_argument("--aug", action=B, default=True)
+    p.add_argument("--xc-drop", type=float, default=0.0,
+                   help="이 확률로 Xc 전체를 빈 이미지로 = 무조건부 → 추론 cfg 의 v_u. Eruku text_dropout(텍스트 전체 drop) 대응")
+    p.add_argument("--ref-xc-drop", type=float, default=0.0,
+                   help="이 확률로 샘플의 보이는 영역(마스크 밖) Xc 를 비운다 = ref 전사(T_s) 없는 학습 → --style-text none 추론. Eruku style_text_dropout 대응")
     p.add_argument("--ragged", type=float, default=0.0, help="짧은 줄+오른쪽 여백 페이지 비율(학습셋만, val 은 기존 그대로)")
     p.add_argument("--val-every", type=int, default=500, help="0=off")
     p.add_argument("--val-batches", type=int, default=2)
@@ -189,6 +193,11 @@ def main():
         if step >= args.max_steps:
             break
         x, xc, m = to_dev(b)
+        # 두 dropout 은 샘플마다 독립(Eruku 와 같은 짝): 보이는 영역 Xc(ref 전사, style_text_dropout) / Xc 전체(text_dropout)
+        for p_drop, region in ((args.ref_xc_drop, m == 0), (args.xc_drop, torch.ones_like(m, dtype=torch.bool))):
+            if p_drop > 0:
+                drop = (torch.rand(x.shape[0], 1, 1, 1, device=device) < p_drop) & region
+                xc = torch.where(drop, torch.ones_like(xc), xc)
         inp = build_inputs(x, xc, m, vae, args.rape, args.ape)          # no_grad(VAE 동결)
         # ★ bf16 autocast = accelerate mixed_precision 과 동일(dreambooth-flux). LoRA 파라미터/grad 는 fp32 유지.
         with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=device.type == "cuda"):
