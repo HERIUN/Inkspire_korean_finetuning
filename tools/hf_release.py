@@ -103,6 +103,7 @@ colorFrom: gray
 colorTo: indigo
 sdk: gradio
 sdk_version: 6.20.0
+python_version: "3.12.12"   # ZeroGPU 지원: 3.12.12 · 3.10.13 만 (diffusers 0.42 Flux3 는 ≥3.11)
 app_file: app.py
 pinned: false
 license: other
