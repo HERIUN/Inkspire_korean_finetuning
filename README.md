@@ -30,10 +30,19 @@ Content, and Noise* (Wang et al., ICLR 2026, OpenReview `FBPuLChGNX`) 의 한글
 ## 사용 팁
 
 ```python
+import numpy as np
+from PIL import Image
 from infer.inkspire import InkSpireGen
-g = InkSpireGen("<lora_dir>", cfg=2.0, uncond="gen")          # ← 권장. 기본값(cfg=1.0)은 CFG 끔
-out = g.gen_lines(ref_u8, "ref 이미지에 적힌 글자 그대로", ["생성할 문장"], seed=0)[0]
+g = InkSpireGen("<lora_dir>", cfg=2.0, uncond="gen",          # ← 권장. 기본값(cfg=1.0)은 CFG 끔
+                std_font="assets/fonts/label/NanumGothic-Regular.ttf")   # 기본값과 같음 — 생략 가능
+ref = np.asarray(Image.open("style_line.png").convert("L"))   # 스타일 손글씨 한 줄 — 흑백 uint8 [H,W], 잉크 0 · 배경 255
+outs = g.gen_lines(ref, "ref 이미지에 적힌 글자 그대로", ["생성할 문장", "둘째 줄"], seed=0)   # 줄마다 uint8 [h,w]
+Image.fromarray(outs[0]).save("out.png")
 ```
+
+- **표준폰트(Xc 를 그리는 폰트) = `assets/fonts/label/NanumGothic-Regular.ttf` 가 반드시 있어야 한다** — `std_font` 기본값이 이 경로다
+  (`custom_datasets/korean/page.py` `STD_FONT`). 학습 때 쓴 폰트와 **같은 파일**이어야 한다 — 다른 폰트로 Xc 를 그리면 상자·글리프가 학습 분포 밖이 된다.
+  [나눔고딕](https://hangeul.naver.com/font)(SIL OFL 1.1)을 받아 그 경로에 둔다(아래 「필요한 자산」). 빈 프롬프트 캐시 `model_zoo/klein_empty_prompt.pt` 도 필요하다(`./train.sh fetch-klein`, 또는 HF 모델 repo 에 같이 있다).
 
 평가·몽타주 스크립트에선 체크포인트 문자열로 같은 설정을 준다: `inkspire:<lora_dir>,cfg=2.0,uncond=gen`.
 

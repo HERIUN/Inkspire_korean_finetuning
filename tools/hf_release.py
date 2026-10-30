@@ -89,7 +89,10 @@ from infer.inkspire import InkSpireGen          # GitHub repo 루트에서
 
 lora = snapshot_download("{MODEL_REPO}")        # pytorch_lora_weights.safetensors + klein_empty_prompt.pt
 # klein_empty_prompt.pt 는 model_zoo/ 에 둔다(빈 프롬프트 텍스트 임베딩 캐시 — 텍스트 인코더를 안 올린다)
-g = InkSpireGen(lora, device="cuda", cfg=2.0, uncond="gen")   # 권장. cfg=1.0 = CFG 끔(필체 최대, 오타↑)
+# 표준폰트: 나눔고딕(SIL OFL 1.1, https://hangeul.naver.com/font) NanumGothic-Regular.ttf 를
+#   assets/fonts/label/ 에 둔다 — std_font 기본 경로이고, 학습 때 Xc 를 그린 폰트와 같은 파일이어야 한다
+g = InkSpireGen(lora, device="cuda", cfg=2.0, uncond="gen",   # 권장. cfg=1.0 = CFG 끔(필체 최대, 오타↑)
+                std_font="assets/fonts/label/NanumGothic-Regular.ttf")
 ref = np.asarray(Image.open("style_line.png").convert("L"))   # 손글씨 한 줄(스캔 테두리·여백은 미리 잘라 둔다)
 out = g.gen_lines(ref, "스타일 이미지의 전사", ["생성할 문장"], seed=0)[0]   # u8 줄 이미지
 ```
