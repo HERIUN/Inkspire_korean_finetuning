@@ -160,18 +160,22 @@ def cfm_loss(transformer, inp, cache, guidance=None):
     return (err * m).sum() / m.sum().clamp(min=1)
 
 
-def xc_uncond(xc, mask=None):
-    """무조건부 Xc = **빈(흰) 이미지** — ref 전사·목표 글자 모두 없음. Eruku text_dropout(텍스트 전체 → uncond_embedding)과 같다.
+def xc_uncond(xc, mask=None, region="all"):
+    """무조건부 Xc. region="all" = **빈(흰) 이미지** — ref 전사·목표 글자 모두 없음. Eruku text_dropout(텍스트 전체 → uncond_embedding)과 같다.
     학습 `--xc-drop p` 가 이 확률로 이 입력을 주고, 추론 `cfg` 가 무조건부 예측 v_u 로 쓴다.
-    ★ 2026-10-27 전(finetune_runs/inkspire_klein_xcdrop)은 생성 영역만 비웠다 — 그 LoRA 와는 규약이 다르다."""
-    return torch.ones_like(xc)
+    region="gen" = **생성 영역(mask=1)만** 비우고 ref 줄 대응표는 남긴다 → v_c − v_u 가 내용(+layout)만 가리켜 필체 단서는 안 키운다.
+    finetune_runs/inkspire_klein_xcdrop(2026-10-26, 옛 --xc-drop)이 이 입력으로 학습됐다."""
+    return torch.ones_like(xc) if region == "all" else torch.where(mask.bool(), torch.ones_like(xc), xc)
 
 
 @torch.no_grad()
-def generate(transformer, vae, x, xc, mask, cache, steps=20, guidance=None, seed=0, rape=None, ape=None, cfg=1.0):
+def generate(transformer, vae, x, xc, mask, cache, steps=20, guidance=None, seed=0, rape=None, ape=None, cfg=1.0, uncond="all", cfg_s=None):
     """Euler ODE → x·(1−mask) + gen·mask, [B,1,H,W]∈[-1,1]. 비마스크 토큰은 매 step GT 노이즈 버전으로 고정.
-    cfg ≠ 1: CFG — v = v_u + cfg·(v_c − v_u), v_u 는 xc_uncond(Xc 전체 빈 이미지) 조건. 조건/무조건을 한 배치로.
-      `--xc-drop` 으로 학습한 LoRA 에서만 의미가 있다(아니면 v_u 가 분포 밖)."""
+    cfg ≠ 1: CFG — v = v_u + cfg·(v_c − v_u), v_u 는 xc_uncond(xc, mask, uncond) 조건(all = Xc 전체 빈 이미지, gen = 생성 영역만). 조건/무조건을 한 배치로.
+      학습 안 한 v_u 로도 듣는다(EXPERIMENTS §10 내용 CFG).
+    cfg_s 를 주면 두 조건 분리 guidance(InstructPix2Pix): v = v_all + cfg_s·(v_gen − v_all) + cfg·(v_c − v_gen)
+      — v_gen = 생성 영역만 비운 Xc(ref 대응표 유지), v_all = Xc 전체 빈 이미지. cfg_s 가 ref 대응표(필체) 쪽, cfg 가 내용 쪽.
+      cfg_s=1 ≡ uncond="gen", cfg_s=cfg ≡ uncond="all". 3배 배치."""
     inp = build_inputs(x, xc, mask, vae)
     x0, keep = inp["x0_packed"], ~inp["loss_mask"][..., None]
     B = x0.shape[0]
@@ -181,12 +185,13 @@ def generate(transformer, vae, x, xc, mask, cache, steps=20, guidance=None, seed
     g = torch.Generator(device=x0.device).manual_seed(seed)
     z = torch.randn(x0.shape, generator=g, device=x0.device, dtype=torch.float32)
     lat = z.clone()
-    if cfg != 1.0:
-        inp2 = dict(inp, cond_packed=torch.cat([inp["cond_packed"], build_inputs(x, xc_uncond(xc, mask), mask, vae)["cond_packed"]]))
+    us = ["gen", "all"] if cfg_s is not None else [uncond] if cfg != 1.0 else []
+    if us:
+        inp2 = dict(inp, cond_packed=torch.cat([inp["cond_packed"], *(build_inputs(x, xc_uncond(xc, mask, u), mask, vae)["cond_packed"] for u in us)]))
     for i in range(steps):
-        if cfg != 1.0:
-            vc, vu = _pred(transformer, torch.cat([lat, lat]), inp2, sig[i].expand(2 * B), cache).float().chunk(2)
-            v = vu + cfg * (vc - vu)
+        if us:
+            vs = _pred(transformer, torch.cat([lat] * (1 + len(us))), inp2, sig[i].expand((1 + len(us)) * B), cache).float().chunk(1 + len(us))
+            v = vs[2] + cfg_s * (vs[1] - vs[2]) + cfg * (vs[0] - vs[1]) if cfg_s is not None else vs[1] + cfg * (vs[0] - vs[1])
         else:
             v = _pred(transformer, lat, inp, sig[i].expand(B), cache).float()
         lat = lat + (sig[i + 1] - sig[i]) * v
@@ -256,6 +261,13 @@ def _smoke(device):
     out2 = generate(tr, vae, x, xc, mask, cache, steps=2, cfg=2.0)
     assert torch.equal(out2[mask == 0], x[mask == 0]) and not torch.equal(out2, out)
     assert (xc_uncond(xc, mask) == 1).all()
+    u = xc_uncond(xc, mask, "gen")
+    assert (u[mask.expand_as(u) == 1] == 1).all() and torch.equal(u[mask.expand_as(u) == 0], xc[mask.expand_as(xc) == 0])
+    out3 = generate(tr, vae, x, xc, mask, cache, steps=2, cfg=2.0, uncond="gen")
+    assert not torch.equal(out3, out2)
+    # (5c) 분리 guidance: cfg_s=1 ≡ uncond=gen, cfg_s=cfg ≡ uncond=all (배치 크기가 달라 수치 오차만)
+    assert torch.allclose(generate(tr, vae, x, xc, mask, cache, steps=2, cfg=2.0, cfg_s=1.0), out3, atol=1e-3)
+    assert torch.allclose(generate(tr, vae, x, xc, mask, cache, steps=2, cfg=2.0, cfg_s=2.0), out2, atol=1e-3)
     # (6) save → load 왕복
     with tempfile.TemporaryDirectory() as d:
         save_lora(tr, d)

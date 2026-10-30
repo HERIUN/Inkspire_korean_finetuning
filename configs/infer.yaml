@@ -14,6 +14,8 @@ inkspire:                   # infer/inkspire.py — InkSpire one-shot [스타일
   lines: [다람쥐 헌 쳇바퀴에 타고파, 한국어 손글씨 생성 2024, 밝은 햇살 붉은 노을]   # 한 번에 생성할 줄들
   steps: 20                 # ODE step (논문 ~20)
   guidance: 30.0            # 학습과 동일해야 함 (configs/inkspire.yaml model.guidance)
+  cfg: 2.0                  # 내용 CFG(1.0 = 끔). 2.0 = 실손글씨 CER 0.25 → 0.07, HWD 약간↑ (EXPERIMENTS §10)
+  uncond: gen               # v_u 에서 비울 Xc: gen = 생성 영역만(ref 대응표 유지) / all = 전체
   seed: 0
   exclude_writers: [UlsanJunggu]
   cell_w: 380

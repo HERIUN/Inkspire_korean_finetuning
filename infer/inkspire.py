@@ -77,14 +77,16 @@ def _ink_box(arr, th=250):
 
 class InkSpireGen:
     def __init__(self, lora_dir=None, layout_ckpt=None, device="cuda", steps=20, guidance=30.0,
-                 rape=True, ape=True, std_font=STD_FONT, trim_ref=True, degrade=0.0, tight_mask=False, ref_width=True, line_h=LINE_H, cfg=1.0):
+                 rape=True, ape=True, std_font=STD_FONT, trim_ref=True, degrade=0.0, tight_mask=False, ref_width=True, line_h=LINE_H, cfg=1.0, uncond="all", cfg_s=None):
         """lora_dir=None 이면 FLUX 를 안 올린다(prepare/--dry-run 전용). layout_ckpt=None → std layout.
         tight_mask: 마스크 = [ref 잉크 바닥 ↑16격자, 목표 상자 바닥+4 ↑16격자) — 캔버스도 거기서 끝난다.
           기본(False)은 y_cut = clip(목표 top−2, ref 바닥+1, TOP+PITCH), H = max(TOP+PITCH·(n+1), 상자 바닥+8).
         ref_width(기본 켬, 2026-10-22~): 목표 줄 상자의 x 를 ref 의 "손글씨 폭 / 표준폰트 폭" 비율로 늘이거나 줄인다(std layout 전용).
           끄면 목표 줄 폭·자간이 표준폰트 그대로라 출력이 GT 보다 ~23% 넓다(Eruku 7%) — HWD 의 큰 몫(EXPERIMENTS §9)."""
         self.device, self.steps, self.guidance, self.rape, self.ape = device, steps, guidance, rape, ape
-        self.cfg = cfg   # CFG(FLUX.3-Image-Klein-Base, --xc-drop 학습 LoRA 전용, v_u = Xc 빈 이미지). 1.0 = 끔
+        self.cfg = cfg   # CFG(FLUX.3-Image-Klein-Base). 1.0 = 끔. 학습 안 한 v_u 로도 듣는다(EXPERIMENTS §10 내용 CFG)
+        self.uncond = uncond   # v_u 의 Xc: all = 전체 빈 이미지, gen = 생성 영역만 비움(ref 대응표 유지)
+        self.cfg_s = cfg_s     # 주면 분리 guidance — ref 대응표(필체) 쪽 배율(models.inkspire_klein.generate)
         self.trim_ref, self.degrade, self.tight_mask, self.ref_width = trim_ref, degrade, tight_mask, ref_width
         self.std_font_path = std_font          # ★ 학습(configs/inkspire.yaml data.std_font)과 같아야 한다
         # line_h: 표준폰트 '한글' 잉크 높이 기준(학습 U(40,80)). 줄 간격은 같은 비율(PITCH/LINE_H)로 늘린다
@@ -225,7 +227,7 @@ class InkSpireGen:
         m = torch.from_numpy(c["mask"].astype(np.float32))[None, None].to(dev)
         x_hat = self.M.generate(self.tr, self.vae, t(c["x"]), t(c["xc"]), m, self.cache, steps=self.steps,
                          guidance=self.guidance, seed=seed, rape=self.rape, ape=self.ape,
-                         **({"cfg": self.cfg} if self.cfg != 1.0 else {}))
+                         **({"cfg": self.cfg, "uncond": self.uncond, "cfg_s": self.cfg_s} if self.cfg != 1.0 or self.cfg_s is not None else {}))
         out = ((x_hat[0, 0].cpu().numpy() + 1) * 127.5).clip(0, 255).astype(np.uint8)
         return [self._crop_line(out, c, i) for i in range(len(lines))]
 
@@ -252,6 +254,8 @@ def main():
                     help="한 번에 생성할 줄들(3번째 셀에 세로 적층)")
     ap.add_argument("--steps", type=int, default=20)
     ap.add_argument("--guidance", type=float, default=30.0)
+    ap.add_argument("--cfg", type=float, default=1.0, help="내용 CFG. 권장 2.0(configs/infer.yaml), 1.0 = 끔")
+    ap.add_argument("--uncond", default="all", choices=["all", "gen"], help="CFG v_u 에서 비울 Xc")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--exclude-writers", nargs="*", default=["UlsanJunggu"])
     ap.add_argument("--cell-w", type=int, default=380)
@@ -272,7 +276,8 @@ def main():
     refs = [rng.choice(by_w[w]) for w in writers]
 
     g = InkSpireGen(None if args.dry_run else args.lora_dir, args.layout_ckpt, args.device,
-                    args.steps, args.guidance, std_font=args.std_font)
+                    args.steps, args.guidance, std_font=args.std_font,
+                    cfg=args.cfg, uncond=args.uncond)
     if args.dry_run:
         ref = refs[0]
         arr = np.array(Image.open(ref["image_path"]).convert("L"))

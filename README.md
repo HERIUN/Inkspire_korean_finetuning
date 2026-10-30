@@ -9,43 +9,93 @@ Content, and Noise* (Wang et al., ICLR 2026, OpenReview `FBPuLChGNX`) 의 한글
 - 설계·이슈·측정값: [`docs/inkspire.md`](docs/inkspire.md)
 - HF 릴리즈(LoRA + Space): `tools/hf_release.py {model,space} [--push]` — 베이스는 gated·FLUX Kommunity(비상업)라 재배포 안 함, Space(Eruku 데모에 모델 선택으로 합침) 는 secret `HF_TOKEN` 으로 받는다
 
+## ⚠️ 먼저 읽을 것 — 이 모델의 한계
+
+쓰기 전에 알아야 손해를 안 본다. 아래는 전부 이 저장소에서 **측정·기록된** 것이고, 근거는 [`docs/EXPERIMENTS.md`](docs/EXPERIMENTS.md) 의 해당 절에 있다.
+
+| 한계 | 실측 | 어떻게 대처하나 |
+|---|---|---|
+| **실제 사람 손글씨에서 글자가 틀린다** | 학습 writer 가 전부 **폰트**(12,951종)다. 실손글씨 문장 교차 생성 CER **0.246**(Eruku 0.014) — 폰트(0.023)의 10배. ref 의 글자 모양을 Xc 대응표로 베끼는 구조라 분포 밖 실제 글자 모양을 그대로 옮긴다(획 굵기·흐림·자간은 주원인 아님, §10) | **내용 CFG `cfg=2.0` 을 켠다 → 0.071**(폰트는 0.0045). 남은 오류는 시드마다 다른 글자에서 나므로 틀리면 **seed 를 바꿔** 다시 생성(정답을 알고 3개 중 고르면 0.035) |
+| **ref 전사(style text)가 필수다** | 비우면 CER **0.720**, 300장 중 134장 백지(§5). Xc 의 ref 줄 = 전사를 표준폰트로 그린 글자 대응표라 그게 없으면 무엇을 베낄지 모른다 | 전사를 정확히(띄어쓰기 포함) 넣는다. 모르면 OCR 로 채운 뒤 눈으로 고친다. 전사 없이 쓰려면 Eruku |
+| **CFG 는 공짜가 아니다 — 정확도 ↔ 필체** | cfg 2.0 에서 HWD 폰트 0.93 → 1.02, 실손글씨 문장 1.41 → 1.57(시드 3개 평균). 무조건부 Xc 를 바꾸거나(`uncond`) 필체 쪽 guidance 를 따로 키워도(`cfg_s`) **같은 절충선 위에서만** 움직인다. 추론 2배 | 필체 우선이면 cfg 1.0~1.5. 정확도 대비 이득은 cfg 2.0 이 가장 크다(아래 「사용 팁」 표). 둘 다 낮추려면 학습 분포를 바꿔야 한다 |
+| **줄 모양(글자 위치·자간)은 표준폰트를 따른다** | 목표 줄 글자 상자 = NanumGothic 렌더(std layout). `ref_width` 로 **줄 전체 폭만** ref 에 맞춘다(출력 폭 오차 23% → 7%, §9). 글자별 폭·어절 간격·기준선 흔들림은 안 따라온다 — 실손글씨에서 어절 간격이 GT 보다 좁다(육안). 논문의 레이아웃 모델은 우리 조건에서 오히려 손해(아래 「논문에서 못 옮기는 것」) | 지금은 손댈 수 없다 — 레이아웃 주석이 있는 실손글씨 데이터가 필요 |
+| **ref 의 잉크 농도를 그대로 베낀다** | 가는 펜·연필 ref → 출력도 흐리다(실손글씨 ref 획 평균 밝기 137 → 출력 151, 0 = 검정). 학습 ref 는 진한 획(농도 0.75~1)뿐이었다(§11) | 진한 출력이 필요하면 ref 를 진하게 보정해서 넣는다(출력 151 → 64, CER 은 그대로 — 흐림과 글자 오류는 별개) |
+| **흰 배경만 나온다 — 단 ref 의 선 조각은 따라 그린다** | 학습 종이는 흰색 고정, 밝기 ±12 jitter 뿐 — 종이 질감·색은 옮기지 않는다. 반면 서식 크롭에 남은 **표 선·밑줄은 잉크로 보고 출력에도 긋는다**(서식 몽타주 00183·00055) | 배경은 생성 후 합성. ref 의 선은 미리 지운다 |
+| **긴 실손글씨 줄은 뒷부분이 무너지는 경향** | 실손글씨 문장 18자 이상에서 세 시드 모두 같은 자리가 뭉개진다(육안, 원인 미확인 — "긴 ref 가 압축된다" 는 가설은 코드로 기각, §10) | 줄을 짧게 나눠 생성 |
+| **영어 실손글씨(IAM)는 zero-shot 이다** | 한글 폰트 페이지(영어 단어 혼합)로만 학습. IAM lines ΔCER **0.33**(Eruku −0.03, CFG 없이 측정) | 영어 위주면 Eruku 나 IAM 학습 모델 |
+| **베이스가 비상업 · gated** | FLUX.3-Image-Klein-Base = FLUX Kommunity License | 상업 용도 금지. 약관 수락한 계정 토큰 필요 |
+
+반대로 **지저분한 ref(서식 칸 크롭·표 선 잔재·흐린 획)에는 강하다** — Eruku 가 백지·폭주로 무너지는 곳(~5%)에서도 InkSpire 는 거의 항상 쓴다(~0.5%).
+
+## 사용 팁
+
+```python
+from infer.inkspire import InkSpireGen
+g = InkSpireGen("<lora_dir>", cfg=2.0, uncond="gen")          # ← 권장. 기본값(cfg=1.0)은 CFG 끔
+out = g.gen_lines(ref_u8, "ref 이미지에 적힌 글자 그대로", ["생성할 문장"], seed=0)[0]
+```
+
+평가·몽타주 스크립트에선 체크포인트 문자열로 같은 설정을 준다: `inkspire:<lora_dir>,cfg=2.0,uncond=gen`.
+
+| 설정 | 폰트 n=300 CER / HWD↓ | 실손글씨 문장 n=20 CER / HWD↓ | 언제 |
+|---|---|---|---|
+| `cfg=1.0` (기본, CFG 끔) | 0.023 / **0.93** | 0.249 / **1.41** | 필체(HWD) 최우선 |
+| `cfg=1.5, uncond=gen` | — | 0.107 / 1.57 | 중간 |
+| **`cfg=2.0, uncond=gen`** | **0.0045** / 1.02 | **0.071** / 1.60 | **권장** — 글자 정확도 |
+| `cfg=2.0, cfg_s=4.0` (분리 guidance, 추론 3배) | — | 0.091 / 1.47 | 정확도를 조금 내주고 필체를 조금 되찾기 |
+
+(실손글씨 문장 = 한 사람 20줄 · 시드 3개 평균이라 HWD 차이는 ±0.05 정도 흔들린다.)
+
+- **ref 는 한 줄.** 스캔 테두리·표 선·큰 여백이 있으면 먼저 잉크 bbox 로 자른다(데모의 «여백 자동 제거» = `ink_bbox_crop`). 모델도 내부에서 잉크 bbox 로 자르지만 선 조각은 잉크로 본다.
+- **전사는 글자 하나하나 정확하게.** 전사가 ref 와 어긋나면 대응표가 밀려 이웃 글자가 섞인다.
+- **틀린 글자가 보이면 seed 만 바꿔** 다시 생성한다 — 같은 글자를 매번 틀리는 경우는 드물다.
+- **흐린 연필 ref** 는 출력도 흐리다. 진하게 원하면 ref 대비를 올려서 넣는다.
+- `uncond`: 무조건부 예측에서 비울 Xc — `gen`(생성 영역만, ref 대응표 유지) / `all`(전체). 측정상 차이는 잡음 수준이고 `gen` 이 CER 이 아주 조금 낮았다.
+
 ## Eruku 와 비교 (w/ T_s — ref 전사를 줄 때)
 
-InkSpire = 이 repo 최종(FLUX.3-Image-Klein-Base s13000 + LoRA, `ref_width`). Eruku = [Eruku_korean_finetuning](https://github.com/HERIUN/Eruku_korean_finetuning)
+InkSpire = 이 repo 최종(FLUX.3-Image-Klein-Base s13000 + LoRA, `ref_width`) — **CFG 끔(cfg 1)** 과 **권장 내용 CFG(cfg 2.0, `uncond=gen`)** 두 줄.
+Eruku = [Eruku_korean_finetuning](https://github.com/HERIUN/Eruku_korean_finetuning)
 최종(corpusmax s45000 = HF 릴리즈, 새 디코딩 `gen_only="ctx"`). 두 모델에 **같은 ref 이미지 + 그 전사**를 준다(InkSpire 는 전사가 필수, Eruku 는 선택).
 Eruku cfg 는 한글 권장 1.5, IAM 은 원본 IAM 프로토콜의 γ=1.25. 상세·재현: [`docs/EXPERIMENTS.md`](docs/EXPERIMENTS.md) §5·§9·§10.
 
-**한 줄 요약 — 글자 정확도는 Eruku, 필체 형태(HWD)와 지저분한 ref 견고성은 InkSpire.**
+**한 줄 요약 — 폰트 조건에선 InkSpire(cfg 2.0)가 정확도·필체 모두 앞선다. 실제 사람 손글씨 문장의 정확도는 Eruku, 필체 형태(HWD)와 지저분한 ref(서식 칸)는 InkSpire.**
 
 ### 한글 폰트 (held-out 16폰트 · n=300 · ref "다람쥐 헌 쳇바퀴에 타고파" · PP-OCRv6)
 
 | | CER↓ | 한글 | 숫자 | 기호 | HWD↓ | FID↓ | BFID↓ |
 |---|---|---|---|---|---|---|---|
-| InkSpire | 0.023 | 1.9% | 3.2% | **2.2%** | **0.93** | 37.3 | 16.2 |
-| Eruku | **0.010** | **0.8%** | **1.9%** | 5.8% | 1.12 | **26.8** | 16.2 |
+| InkSpire (cfg 1) | 0.023 | 1.9% | 3.2% | 2.2% | **0.93** | 37.3 | 16.2 |
+| **InkSpire (cfg 2.0)** | **0.0045** | **0.2%** | **0.0%** | **0.0%** | 1.02 | 37.2 | **15.9** |
+| Eruku | 0.010 | 0.8% | 1.9% | 5.8% | 1.12 | **26.8** | 16.2 |
+
+GT 렌더를 같은 리더로 읽은 바닥이 0.0056 — cfg 2.0 은 리더 바닥 수준이다. HWD 하한(같은 폰트로 다른 문구) 0.34.
 
 ![한글 폰트 몽타주](docs/img_readme/font_render.png)
 
-열 = ref | GT(그 폰트 렌더) | InkSpire | Eruku. 셀 라벨 = PP-OCR 판독과 CER(틀리면 회색).
+열 = ref | GT(그 폰트 렌더) | InkSpire cfg 1 | InkSpire cfg 2.0 | Eruku. 폰트당 1행. 셀 라벨 = PP-OCR 판독과 CER(틀리면 회색).
 
 ### 실제 손글씨 ([HERIUN/korean-handwriting](https://huggingface.co/datasets/HERIUN/korean-handwriting), 교차 생성)
 
 같은 사람이 쓴 **다른** 표본의 문구를 쓰게 하고 그 표본의 실제 이미지와 비교한다(hw_line = 한 사람의 문장 20줄, 서식 = 행정 서식 손글씨 칸 크롭).
 ref 는 원본 repo 공식 `ink_bbox_crop` 으로 자른다.
 
-| subset | n | 실제 이미지 CER (리더 바닥) | InkSpire CER | Eruku CER | 표본별 InkSpire / Eruku 승 | HWD↓ InkSpire / Eruku |
+| subset | n | 실제 이미지 CER (리더 바닥) | InkSpire CER cfg 1 / **cfg 2.0** | Eruku CER | 표본별 InkSpire cfg 2.0 / Eruku 승 | HWD↓ InkSpire cfg 1 / cfg 2.0 / Eruku |
 |---|---|---|---|---|---|---|
-| 문장 (hw_line) | 20 | 0.133 | 0.246 | **0.014** | 0 / **19** | **1.35** / 1.51 |
-| 서식 (seosik_hw) | 286 | 0.129 | **0.417** | 0.771 (백지 7·폭주 11) | **134** / 101 | **1.20** / 1.83 |
-| 전체 | 338 | 0.136 | **0.398** | 0.667 | 145 / 136 | **1.31** / 1.81 |
+| 문장 (hw_line) | 20 | 0.133 | 0.246 / 0.069 | **0.014** | 2 / **12** | **1.35** / 1.63 / 1.51 |
+| 서식 (seosik_hw) | 286 | 0.129 | 0.417 / **0.180** | 0.711 (백지 7) | **183** / 43 | **1.20** / 1.37 / 1.83 |
+| 전체 | 338 | 0.136 | 0.398 / **0.168** | 0.620 | **204** / 62 | **1.31** / 1.46 / 1.81 |
+
+HWD 하한(같은 사람의 다른 표본끼리, 필기자별 절반 나눔) — 문장 0.29. 서식은 문서당 표본이 적어 하한을 못 잰다.
+Eruku 수치는 현재 덤프를 다시 판독한 값이다(이전 표의 0.771 / 0.667 은 재현되지 않아 정정, EXPERIMENTS §10).
 
 ![실손글씨 문장](docs/img_readme/real_hw_line.png)
 
 ![실손글씨 서식](docs/img_readme/real_hw_forms.png)
 
-열 = ref(같은 사람의 다른 표본) | GT(목표 문구의 실제 이미지) | InkSpire | Eruku.
+열 = ref(같은 사람의 다른 표본) | GT(목표 문구의 실제 이미지) | InkSpire cfg 1 | InkSpire cfg 2.0 | Eruku. 서식은 문서당 1행.
 
-자유 문구(데이터에 없는 한글 5개 + 영어 2개, 행 = ref 7개, 칸마다 위 InkSpire / 아래 Eruku):
+자유 문구(데이터에 없는 한글 5개 + 영어 2개, 행 = ref 7개, 칸마다 위 InkSpire / 아래 Eruku — InkSpire 는 cfg 1 로 생성):
 
 ![실손글씨 자유 문구](docs/img_readme/real_hw_free.png)
 
@@ -65,10 +115,12 @@ ref 는 원본 repo 공식 `ink_bbox_crop` 으로 자른다.
 
 열 = ref(같은 필기자의 다른 줄) | GT(실제 줄) | InkSpire | Eruku.
 
-- **IAM 에서도 같은 그림이다** — HWD·FID 는 비슷하고(InkSpire FID 가 조금 낫다), 글자 정확도(ΔCER 0.33 vs −0.03)와 BFID 는 Eruku 가 크게 앞선다.
+- **IAM 에서도 같은 그림이다**(InkSpire cfg 1 로 측정) — HWD·FID 는 비슷하고(InkSpire FID 가 조금 낫다), 글자 정확도(ΔCER 0.33 vs −0.03)와 BFID 는 Eruku 가 크게 앞선다.
   몽타주에서 InkSpire 는 필기자의 기울기·획 질감을 따라가지만 단어가 무너진다.
 - **InkSpire 가 실손글씨에서 정확도를 잃는 이유:** ref 의 글자 모양을 Xc 대응표로 베끼는 구조라, 폰트로만 학습한 모델에 분포 밖 실제 글자 모양이 들어오면
   그 모양을 그대로 옮겨 틀린다(획 굵기·흐림·자간 어긋남은 주원인이 아님 — EXPERIMENTS §10 진단). 같은 구조가 HWD 우위(이진화해도 유지)를 만든다.
+- **내용 CFG(cfg 2.0)가 그 오류 대부분을 걷어낸다** — 재학습 없이, "Xc 를 비운 예측" 반대쪽으로 밀어 목표 글자를 더 세게 따르게 한다.
+  대가는 필체가 조금 정형화되는 것(HWD↑)이다 — 정확도와 HWD 를 둘 다 낮추는 건 추론 손잡이로는 안 됐다(EXPERIMENTS §10 내용 CFG).
 
 
 ## 구조
@@ -118,7 +170,8 @@ GPU=2 ./inference.sh inkspire --dry-run        # FLUX 없이 [x | xc | mask] 캔
 GPU=2 ./eval.sh exp gen_compare --ckpt-after inkspire:finetune_runs/inkspire_p512/lora_last
 ```
 
-`--ckpt` 뒤에 `,key=value` 로 `steps`·`guidance`·`std_font`·`trim_ref`·`degrade` 를 스윕할 수 있다.
+추론 뷰어는 `configs/infer.yaml` 의 `cfg: 2.0, uncond: gen`(권장)으로 돈다 — `--cfg 1.0` 이면 CFG 끔.
+`--ckpt` 뒤에 `,key=value` 로 `steps`·`guidance`·`std_font`·`trim_ref`·`degrade`·`ref_width`·`cfg`·`uncond`·`cfg_s` 를 스윕할 수 있다(평가 스크립트 기본은 cfg 1).
 정량 평가(CER)는 원본 repo 에서 한다. 지난 측정은 [`docs/EXPERIMENTS.md`](docs/EXPERIMENTS.md).
 
 ## 필요한 자산 (전부 `.gitignore` — 심링크 권장)

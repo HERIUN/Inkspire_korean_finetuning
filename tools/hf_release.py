@@ -61,17 +61,20 @@ Xc 를 글자별 대응표로 쓰므로 **ref 전사(style text)는 필수**다 
 
 ## 성능 (ref 전사를 줄 때, PP-OCRv6 판독 CER)
 
-| 평가 | InkSpire (이 모델) | Eruku Korean |
-|---|---|---|
-| 한글 폰트 held-out 16종 n=300 — CER↓ / HWD↓ | 0.023 / **0.93** | **0.010** / 1.12 |
-| 실손글씨 문장 교차 생성 n=20 — CER↓ | 0.246 | **0.014** |
-| 실손글씨 서식 칸 n=286 — CER↓ | **0.417** | 0.771 (백지·폭주) |
-| IAM lines 2,925 — HWD↓ / FID↓ | 1.68 / **18.58** | **1.62** / 20.00 |
+InkSpire 는 **내용 CFG(`cfg=2.0, uncond="gen"`, 권장)** 와 끔(`cfg=1.0`, 기본) 두 줄로 적는다. Eruku 는 권장 cfg 1.5.
 
-글자 정확도는 Eruku, 필체 형태(HWD)와 지저분한 ref 에 대한 견고성은 InkSpire 쪽이 낫다.
-남은 오류는 샘플마다 무작위인 획 오류다(시드 3개 공통 오류 0) — 상세는 GitHub `docs/EXPERIMENTS.md`.
+| 평가 | InkSpire cfg 2.0 | InkSpire cfg 1.0 | Eruku Korean |
+|---|---|---|---|
+| 한글 폰트 held-out 16종 n=300 — CER↓ / HWD↓ | **0.0045** / 1.02 | 0.023 / **0.93** | 0.010 / 1.12 |
+| 실손글씨 문장 교차 생성 n=20 — CER↓ / HWD↓ | 0.071 / 1.60 | 0.246 / **1.41** | **0.014** / 1.51 |
+| 실손글씨 서식 칸 n=286 — CER↓ / HWD↓ | **0.180** / 1.37 | 0.417 / **1.20** | 0.711 (백지 7) / 1.83 |
+| IAM lines 2,925 — HWD↓ / FID↓ | — | 1.68 / **18.58** | **1.62** / 20.00 |
 
-![한글 폰트](samples/font_render.png)
+- 폰트 조건에선 cfg 2.0 이 정확도·필체 모두 Eruku 를 앞선다. **실제 사람 손글씨 문장은 정확도가 Eruku 에 뒤진다** — 폰트로만 학습해 분포 밖 글자 모양을 그대로 베낀다.
+- CFG 는 정확도 ↔ 필체(HWD) 절충이다. 지저분한 ref(서식 칸·표 선 잔재)에선 InkSpire 가 백지·폭주가 거의 없다.
+- 한계 전체와 사용 팁: GitHub README 「먼저 읽을 것」. 측정 근거: `docs/EXPERIMENTS.md` §9·§10.
+
+![한글 폰트 — 열 = ref | GT | InkSpire cfg 1 | InkSpire cfg 2 | Eruku](samples/font_render.png)
 ![IAM](samples/iam_lines.png)
 
 ## 사용법
@@ -86,10 +89,14 @@ from infer.inkspire import InkSpireGen          # GitHub repo 루트에서
 
 lora = snapshot_download("{MODEL_REPO}")        # pytorch_lora_weights.safetensors + klein_empty_prompt.pt
 # klein_empty_prompt.pt 는 model_zoo/ 에 둔다(빈 프롬프트 텍스트 임베딩 캐시 — 텍스트 인코더를 안 올린다)
-g = InkSpireGen(lora, device="cuda")
-ref = np.asarray(Image.open("style_line.png").convert("L"))
+g = InkSpireGen(lora, device="cuda", cfg=2.0, uncond="gen")   # 권장. cfg=1.0 = CFG 끔(필체 최대, 오타↑)
+ref = np.asarray(Image.open("style_line.png").convert("L"))   # 손글씨 한 줄(스캔 테두리·여백은 미리 잘라 둔다)
 out = g.gen_lines(ref, "스타일 이미지의 전사", ["생성할 문장"], seed=0)[0]   # u8 줄 이미지
 ```
+
+- 전사는 글자 그대로 정확히 — Xc 대응표의 원천이다(비우면 붕괴).
+- 틀린 글자가 보이면 seed 만 바꿔 다시 — 오류가 시드마다 다른 글자에서 난다.
+- 흐린 연필 ref 는 출력도 흐리다(잉크 농도를 베낀다). 진하게 원하면 ref 대비를 올려 넣는다.
 
 ## 라이선스
 
@@ -127,7 +134,7 @@ models:
 | Eruku Korean (자기회귀, T5 + 한글 적응 VAE) | [HERIUN/eruku_korean](https://huggingface.co/HERIUN/eruku_korean) | https://github.com/HERIUN/Eruku_korean_finetuning |
 | InkSpire Korean (확산, FLUX.3-Image-Klein-Base + LoRA) | [{MODEL_REPO}](https://huggingface.co/{MODEL_REPO}) | https://github.com/HERIUN/Inkspire_korean_finetuning |
 
-글자 정확도는 Eruku, 필체 형태(HWD)와 지저분한 스캔 ref 는 InkSpire 쪽이 낫다. InkSpire 는 스타일 전사가 필수다.
+실제 사람 손글씨 문장의 글자 정확도는 Eruku, 필체 형태(HWD)·지저분한 스캔 ref·폰트 조건 정확도는 InkSpire(내용 CFG 2.0) 쪽이 낫다. InkSpire 는 스타일 전사가 필수다.
 
 라이선스: Eruku 는 Apache-2.0. InkSpire 의 베이스 {BASE} 는 FLUX Kommunity License(비상업)이며
 그 약관을 수락한 계정 토큰(secret `HF_TOKEN`)으로 실행 때 받는다. 생성 이미지는 AI 로 만든 것이다.
@@ -168,7 +175,7 @@ lora = snapshot_download(INKSPIRE_ID)
 if not (HERE / "model_zoo/klein_empty_prompt.pt").exists():   # models.inkspire_klein.EMPTY_CACHE
     shutil.copyfile(Path(lora) / "klein_empty_prompt.pt", HERE / "model_zoo/klein_empty_prompt.pt")
 from infer.inkspire import InkSpireGen   # noqa: E402
-inkspire = InkSpireGen(lora, device="cuda")
+inkspire = InkSpireGen(lora, device="cuda", cfg=2.0, uncond="gen")   # 내용 CFG — 실손글씨 CER 0.25 → 0.07
 
 # ── Eruku: 기존 데모와 같은 지연 로드
 eruku = None
@@ -219,16 +226,16 @@ def run_eruku(style_image, style_text, lines, cfg_scale, bbox_crop):
     return outs
 
 
-def run_inkspire(style_image, style_text, lines, steps, seed, bbox_crop):
+def run_inkspire(style_image, style_text, lines, ink_cfg, steps, seed, bbox_crop):
     ref = np.asarray(style_image.convert("L"))
     if bbox_crop:
         ref = ink_bbox_crop(ref)
-    inkspire.steps = int(steps)
+    inkspire.steps, inkspire.cfg = int(steps), float(ink_cfg)
     return inkspire.gen_lines(ref, style_text.strip(), lines, seed=int(seed))
 
 
-@GPU(duration=90)
-def generate(model_name, style_image, style_text, gen_text, cfg_scale, steps, seed, bbox_crop):
+@GPU(duration=120)   # InkSpire cfg ≠ 1 은 조건·무조건 2배 배치
+def generate(model_name, style_image, style_text, gen_text, cfg_scale, ink_cfg, steps, seed, bbox_crop):
     lines = [s.strip() for s in (gen_text or "").splitlines() if s.strip()][:8]
     if style_image is None:
         return None, "❌ 스타일 이미지를 업로드하세요"
@@ -240,7 +247,7 @@ def generate(model_name, style_image, style_text, gen_text, cfg_scale, steps, se
         if model_name == "InkSpire":
             if not (style_text or "").strip():
                 return None, "❌ InkSpire 는 스타일 전사가 필수입니다(없으면 붕괴)"
-            outs = run_inkspire(style_image, style_text, lines, steps, seed, bbox_crop)
+            outs = run_inkspire(style_image, style_text, lines, ink_cfg, steps, seed, bbox_crop)
         else:
             outs = run_eruku(style_image, style_text, lines, cfg_scale, bbox_crop)
         return Image.fromarray(vstack(outs)), f"✅ {model_name} · {len(outs)}줄 생성"
@@ -289,6 +296,8 @@ with gr.Blocks(css=custom_css, title="Eruku · InkSpire Korean — 한글 손글
                                         value="한국어 손글씨 생성 테스트")
             cfg_slider = gr.Slider(label="🎚️ CFG scale (Eruku) — 1.0 = 원문 충실도 최고, 1.5~2.0 = 스타일 강조",
                                    minimum=1.0, maximum=3.0, step=0.1, value=1.5)
+            ink_cfg_slider = gr.Slider(label="🎚️ CFG (InkSpire) — 1.0 = 끔(필체 최대·오타↑), 2.0 = 권장(오타↓, 필체 약간 정형화)",
+                                       minimum=1.0, maximum=3.0, step=0.1, value=2.0)
             with gr.Row():
                 steps_slider = gr.Slider(label="steps (InkSpire)", minimum=10, maximum=50, step=1, value=20)
                 seed_input = gr.Number(label="seed (InkSpire)", value=0, precision=0)
@@ -304,7 +313,7 @@ with gr.Blocks(css=custom_css, title="Eruku · InkSpire Korean — 한글 손글
         gr.Examples(examples=examples, inputs=[style_image_input, style_text_input, gen_text_input],
                     label="📚 예시 스타일", examples_per_page=4, cache_examples=False)
 
-    inputs = [model_radio, style_image_input, style_text_input, gen_text_input, cfg_slider, steps_slider,
+    inputs = [model_radio, style_image_input, style_text_input, gen_text_input, cfg_slider, ink_cfg_slider, steps_slider,
               seed_input, bbox_checkbox]
     for trigger in (generate_btn.click, gen_text_input.submit):
         trigger(fn=generate, inputs=inputs, outputs=[output_image, status_text])
@@ -316,16 +325,17 @@ with gr.Blocks(css=custom_css, title="Eruku · InkSpire Korean — 한글 손글
 2. **스타일 전사** — Eruku 는 선택(넣으면 정확도↑), **InkSpire 는 필수**(글자 위치 대응표를 전사로 만듭니다)
 3. **생성할 텍스트** → 생성. 예제 앞 3개는 실제 사람 손글씨 스캔, 나머지는 폰트 렌더입니다.
 
-### 📊 비교 (ref 전사를 줄 때, PP-OCRv6 CER↓)
+### 📊 비교 (ref 전사를 줄 때, PP-OCRv6 CER↓ / HWD↓, InkSpire = CFG 2.0)
 | 평가 | Eruku | InkSpire |
 |---|---|---|
-| 한글 폰트 held-out 16종 (n=300) — CER / HWD↓ | **0.010** / 1.12 | 0.023 / **0.93** |
-| 실손글씨 문장 교차 생성 (n=20) | **0.014** | 0.246 |
-| 실손글씨 서식 칸 (n=286) | 0.771 (백지·폭주) | **0.417** |
+| 한글 폰트 held-out 16종 (n=300) | 0.010 / 1.12 | **0.0045** / **1.02** |
+| 실손글씨 문장 교차 생성 (n=20) | **0.014** / **1.51** | 0.069 / 1.63 |
+| 실손글씨 서식 칸 (n=286) | 0.711 (백지 7) / 1.83 | **0.180** / **1.37** |
 
 - **Eruku**: 한글 적응 VAE([HERIUN/emuru_vae_korean](https://huggingface.co/HERIUN/emuru_vae_korean))와 짝. 여백 있는 스캔은 «여백 자동 제거» 를 반드시 켜세요
   (실측 CER 0.119 켬 vs 1.571 끔). 짧은 문장이 가장 어렵고, 잉크를 선명한 검정으로 스냅합니다.
-- **InkSpire**: FLUX.3-Image-Klein-Base(FLUX Kommunity License, 비상업) + LoRA. 남은 오류는 시드마다 다른 획 오류라 이상하면 seed 를 바꿔 보세요.
+- **InkSpire**: FLUX.3-Image-Klein-Base(FLUX Kommunity License, 비상업) + LoRA. **CFG 2.0 권장** — 1.0 으로 내리면 필체는 더 닮지만 오타가 3배 이상 늘어납니다.
+  틀린 글자는 시드마다 다른 곳에서 나므로 이상하면 seed 를 바꿔 보세요. 흐린 연필 ref 는 출력도 흐리고, ref 에 남은 표 선·밑줄도 따라 그립니다.
 - 생성 이미지는 AI 가 만든 것입니다.
 
 ### 인용 (base models)
@@ -404,6 +414,7 @@ if __name__ == "__main__":
     ap.add_argument("what", choices=["model", "space"])
     ap.add_argument("--out", default=None, help="스테이징 폴더(기본 _release/<what>)")
     ap.add_argument("--push", action="store_true")
+    ap.add_argument("--msg", default="InkSpire Korean s13000 release", help="HF 커밋 메시지")
     a = ap.parse_args()
     out = Path(a.out or HERE / "_release" / a.what)
     shutil.rmtree(out, ignore_errors=True)
@@ -411,4 +422,4 @@ if __name__ == "__main__":
     print(f"staged → {out}")
     if a.push:
         _push(out, MODEL_REPO if a.what == "model" else SPACE_REPO, "model" if a.what == "model" else "space",
-              "InkSpire Korean s13000 release")
+              a.msg)

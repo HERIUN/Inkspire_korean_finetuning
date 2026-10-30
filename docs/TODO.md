@@ -22,7 +22,16 @@
   - 근거는 Eruku cfg 1.0 → 1.5 의 CER 0.018 → 0.010 뿐, InkSpire 측정 없음. Xc 는 이미 위치까지 맞춘 강한 조건이라 효과 없을 수 있음.
   - 비용: HWD 악화 가능, 추론 2배. 1차와 따로 돌려야 어느 dropout 효과인지 분리된다.
 
-### (보관) 목표 Xc dropout — 용도 불일치로 미평가
+### 내용 CFG 확대 평가 — 다음
+
+2026-10-28: 최종 LoRA(dropout 없음) + `cfg=2.0` 이 실손글씨 hw_line CER 0.25 → 0.075, HWD 1.35 → 1.58(EXPERIMENTS §10 내용 CFG).
+- 폰트 렌더 §5 n=300 (`cer_dump.py` + `inkspire:<lora>,cfg=…`)과 seosik_hw 에서 CER·HWD.
+- cfg 1.5 / 2.0 / 2.5 / 3.0 스윕 — CER·HWD 절충점. 괜찮으면 `cfg` 기본값·HF Space 반영.
+- **재학습 대기 중(2026-10-28):** `finetune_runs/inkspire_klein_refxc_xc` — `--ref-xc-drop 0.1 --xc-drop 0.05`(위 "2차" 를 1차 없이 바로, Eruku 짝),
+  p512 와 같은 레시피 13k, 처음부터. 기존 xcdrop 은 생성 영역만 비운 옛 규약이라 v_u(Xc 전체 빈 이미지)와 안 맞았다.
+  `waiter.sh` 가 다른 프로세스 없는 GPU(2 우선)를 잡으면 시작. 평가: hw_line 교차 cfg 1.5/2.0 × 시드 3(기존 두 LoRA 와 CER·HWD) + `--style-text none` CER(0.720 에서 회복?).
+
+### (보관) 목표 Xc dropout — 용도 불일치로 미평가 → 2026-10-28 평가함(위)
 
 ★ 이 LoRA 는 생성 영역 Xc 만 비워 학습했다 — 지금 `xc_uncond`(Xc 전체 빈 이미지)와 규약이 달라 cfg 평가에 그대로 쓸 수 없다.
 
