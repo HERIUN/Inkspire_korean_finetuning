@@ -119,6 +119,7 @@ def main():
                     help="ref 전처리: eruku = 원본 repo 공식 크롭(기본) / prep = 표 선 제거+백분위+15%% 여백 / raw = 원본 그대로")
     ap.add_argument("--stroke", type=int, default=0,
                     help="진단용: 크롭 뒤 ref 획을 k×k 최솟값 필터로 굵히고 잉크를 검정(0)으로 진하게 — 가늘고 연한 실제 획이 원인인지")
+    ap.add_argument("--no-style-text", action="store_true", help="ref 전사를 주지 않는다(EXPERIMENTS §14)")
     ap.add_argument("--cross", action="store_true", help="같은 필기자의 다른 표본 문구를 생성(docstring)")
     ap.add_argument("--free", nargs="*", default=None, help="데이터에 없는 문구들 — --refs 와 함께")
     ap.add_argument("--refs", nargs="*", type=int, default=[], help="--free 에 쓸 ref 표본 번호(metadata 순서)")
@@ -160,7 +161,7 @@ def main():
         arr = load(r)
         ref = thick({"eruku": eruku_crop, "prep": prep, "raw": lambda x: x}[a.crop](arr), a.stroke)
         t = rows[nxt[i]] if a.cross else r   # 목표 표본(echo 면 자기 자신)
-        g = gen(ref, r["text"], t["text"], a.seed * 1_000_003 + i)
+        g = gen(ref, "" if a.no_style_text else r["text"], t["text"], a.seed * 1_000_003 + i)
         Image.fromarray(g).save(out / "gen" / name)
         Image.fromarray(load(t)).save(out / "gt" / name)   # 목표 표본의 실제 이미지(전처리 전) — CER 리더 바닥·HWD real
         tr[name] = t["text"]

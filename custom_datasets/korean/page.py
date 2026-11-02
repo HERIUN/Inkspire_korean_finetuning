@@ -94,12 +94,31 @@ def wrap_lines(words: list[str], font, max_w, n_lines: int) -> list[str]:
 
 
 # ───────────────────────────── 렌더 ─────────────────────────────
-def render_line(font, text: str, page_w: int, line_top: int, left: int = 0):
+def _jit_glyph(font, ch, b, rng):
+    """글리프 하나를 크기 U(0.85,1.0) 로 줄인다(중심 기준) → (잉크 u8, 원래 bbox 왼쪽 위 기준 오프셋 dx, dy).
+    키우지 않는다 — 자기 advance 를 넘어 이웃 글자와 겹친다.
+    회전은 안 한다 — Xc 상자에 안 실리는 글자별 잡음이라 목표가 예측 불가능해진다."""
+    pad = 8
+    w, h = b[2] - b[0] + 2 * pad, b[3] - b[1] + 2 * pad
+    im = Image.new("L", (w, h), 255)
+    ImageDraw.Draw(im).text((pad - b[0], pad - b[1]), ch, font=font, fill=0)
+    M = cv2.getRotationMatrix2D((w / 2, h / 2), 0, rng.uniform(0.85, 1.0))
+    g = cv2.warpAffine(np.array(im), M, (w, h), flags=cv2.INTER_LINEAR, borderValue=255)
+    ys, xs = np.where(g < 200)
+    if len(ys) == 0:
+        return None
+    return g[ys.min():ys.max() + 1, xs.min():xs.max() + 1], int(xs.min()) - pad, int(ys.min()) - pad
+
+
+def render_line(font, text: str, page_w: int, line_top: int, left: int = 0, jit: random.Random | None = None):
     """한 줄 렌더. 반환 (ink u8[asc+desc+2·STRIP_PAD, page_w], chars, boxes int32[N,4]).
 
     strip 의 페이지 y 원점은 `line_top − STRIP_PAD` (호출자가 그 위치에 합성). boxes 는 이미
     페이지 좌표. baseline = line_top + ascent. 공백 = [x, baseline, x+adv, baseline] (h=0).
-    w/h ≤ 0 글리프(온글잎 폰트의 0-size 구두점 등)는 토큰째 버린다."""
+    w/h ≤ 0 글리프(온글잎 폰트의 0-size 구두점 등)는 토큰째 버린다.
+    jit(rng) 를 주면 손글씨 흔들기: 글자별 크기(×U(0.85,1))·기준선(σ 4% 높이)·자간(×U(1,1.25), 공백 ×U(0.5,1.8)).
+    크기는 줄이기만, 자간은 넓히기만 — 글자가 자기 advance 칸을 넘지 않아 가로로 겹치지 않는다.
+    box 는 변형된 잉크에 맞춰 옮긴다 — X 와 Xc 짝이 그대로 맞는다."""
     asc, desc = font.getmetrics()
     H = asc + desc + 2 * STRIP_PAD
     img = Image.new("L", (page_w, H), 255)
@@ -107,8 +126,11 @@ def render_line(font, text: str, page_w: int, line_top: int, left: int = 0):
     chars, boxes = [], []
     x = float(left)
     y_off = line_top - STRIP_PAD
+    canvas = np.array(img) if jit else None
     for ch in text:
         adv = font.getlength(ch)
+        if jit:
+            adv *= jit.uniform(0.5, 1.8) if ch == " " else jit.uniform(1.0, 1.25)
         xi = int(round(x))
         if ch == " ":
             base = STRIP_PAD + asc
@@ -119,11 +141,28 @@ def render_line(font, text: str, page_w: int, line_top: int, left: int = 0):
             if box[2] <= box[0] or box[3] <= box[1]:
                 x += adv
                 continue
-            draw.text((xi, STRIP_PAD), ch, font=font, fill=0)
+            if jit:
+                r = _jit_glyph(font, ch, b, jit)
+                if r is None:
+                    x += adv
+                    continue
+                g, dx, dy = r
+                dy += int(round(jit.gauss(0, 0.04 * (asc + desc))))
+                gx, gy = box[0] + dx, box[1] + dy
+                cx0, cy0 = max(0, gx), max(0, gy)
+                cx1, cy1 = min(page_w, gx + g.shape[1]), min(H, gy + g.shape[0])
+                if cx1 <= cx0 or cy1 <= cy0:
+                    x += adv
+                    continue
+                canvas[cy0:cy1, cx0:cx1] = np.minimum(canvas[cy0:cy1, cx0:cx1], g[cy0 - gy:cy1 - gy, cx0 - gx:cx1 - gx])
+                box = [cx0, cy0, cx1, cy1]
+            else:
+                draw.text((xi, STRIP_PAD), ch, font=font, fill=0)
         chars.append(ch)
         boxes.append([box[0], box[1] + y_off, box[2], box[3] + y_off])
         x += adv
-    return np.array(img, dtype=np.uint8), chars, np.array(boxes, dtype=np.int32).reshape(-1, 4)
+    ink = canvas if jit else np.array(img, dtype=np.uint8)
+    return ink, chars, np.array(boxes, dtype=np.int32).reshape(-1, 4)
 
 
 @lru_cache(maxsize=8192)
@@ -162,7 +201,11 @@ def render_content(chars, bboxes, std_font_path=STD_FONT, H: int = 0, W: int = 0
 def _rotate_strip(strip, boxes, y_off, deg):
     """strip 회전 + bbox 모서리에 같은 변환 적용. ponytail: 회전된 bbox 는 외접사각형(약간 느슨)."""
     h, w = strip.shape
-    M = cv2.getRotationMatrix2D((w / 2, h / 2), deg, 1.0)
+    return _affine_strip(strip, boxes, y_off, cv2.getRotationMatrix2D((w / 2, h / 2), deg, 1.0))
+
+
+def _affine_strip(strip, boxes, y_off, M):
+    h, w = strip.shape
     out = cv2.warpAffine(strip, M, (w, h), flags=cv2.INTER_LINEAR,
                          borderMode=cv2.BORDER_CONSTANT, borderValue=255)
     if len(boxes) == 0:
@@ -177,14 +220,16 @@ def _rotate_strip(strip, boxes, y_off, deg):
 
 
 def render_page(font_path, lines: list[str], std_font_path=STD_FONT, page_w: int = 1024,
-                line_h_px: float = 64, rng: random.Random = None, aug: bool = True,
+                line_h_px: float = 64, rng: random.Random = None, aug: bool = True, hw: bool = False,
                 pitch: int = None) -> dict:
     """페이지 합성. 반환 {x u8[H,W], xc u8[H,W], chars, bboxes int32[N,4], line_id int32[N],
     page_w, pitch, line_top list[int]}.
 
     pitch 미지정 시 line_h·U(1.05,1.35). x 는 aug 면 줄 회전(p0.5, ±3°) → 페이지 elastic(p0.7)/
     morph(p0.15)/blur(p0.4)/배경합성/jitter(p0.5). xc 는 **회전 후** bbox 로 렌더한 깨끗한 콘텐츠.
-    ponytail: elastic 의 ≤3px 이동은 bbox 에 반영하지 않는다(외접사각형이 이미 그만큼 느슨)."""
+    ponytail: elastic 의 ≤3px 이동은 bbox 에 반영하지 않는다(외접사각형이 이미 그만큼 느슨).
+    hw(손글씨 증강, aug 와 별개): 글자별 흔들기(render_line jit) +
+    획 굵기(p0.5, 2~3px erode/dilate) + 흐린 잉크(p0.3, 농도 U(60,150) — 연필·가는 펜). 실손글씨 ref 분포 쪽으로 넓힌다."""
     rng = rng or random.Random(0)
     px = font_px(font_path, line_h_px)
     font = _font(str(font_path), px)
@@ -197,7 +242,7 @@ def render_page(font_path, lines: list[str], std_font_path=STD_FONT, page_w: int
     for i, text in enumerate(lines):
         lt = top + i * pitch
         line_top.append(lt)
-        strip, ch, bx = render_line(font, text, page_w, lt, left)
+        strip, ch, bx = render_line(font, text, page_w, lt, left, jit=rng if hw else None)
         y_off = lt - STRIP_PAD
         if aug and rng.random() < 0.5:
             strip, bx = _rotate_strip(strip, bx, y_off, rng.uniform(-3, 3))
@@ -219,12 +264,16 @@ def render_page(font_path, lines: list[str], std_font_path=STD_FONT, page_w: int
             x = G.aug_elastic(x, amp=2.5, sigma=8.0, rng=rng)
         if rng.random() < 0.15:
             x = G.aug_morph(x, rng)
+        if hw and rng.random() < 0.5:   # 획 굵기: erode = 굵게, dilate = 가늘게(잉크가 어둡다)
+            k = np.ones((rng.choice([2, 3]),) * 2, np.uint8)
+            x = cv2.erode(x, k) if rng.random() < 0.5 else cv2.dilate(x, k)
         if rng.random() < 0.4:
             x = cv2.GaussianBlur(x, (3, 3), 0)
         # 종이는 흰색 고정. 예전엔 assets/backgrounds 에서 패치를 뽑았는데 그 3장이 전부 단색
         # (246/239/255, std 0.0)이라 종이 톤 3개를 고르는 것뿐이었고 jitter(밝기 ±12)가 이미 덮는다.
+        ink = rng.uniform(60, 150) if hw and rng.random() < 0.3 else rng.uniform(0, 55)
         x = G.composite(x, np.full((H, page_w), 255.0, np.float32),
-                        rng.uniform(0, 55), rng.uniform(0.7, 1.0))   # 잉크 농도·alpha 증강은 유지
+                        ink, rng.uniform(0.7, 1.0))   # 잉크 농도·alpha 증강은 유지
         if rng.random() < 0.5:
             x = G.jitter(x, rng)
     return {"x": x, "xc": xc, "chars": chars, "bboxes": boxes,
@@ -336,14 +385,15 @@ class KoreanPageDataset(torch.utils.data.Dataset):
       DataLoader 워커가 같은 샘플러 상태를 복제해도 샘플이 겹치지 않는다.
     ★ 페이지는 n_lines = ceil(P/pitch)+U(0,3), page_w = max(page_w, P) 라 항상 P×P 크롭이 가능하다.
     ★ ragged: 페이지를 이 확률로 "줄마다 폭 U(0.15,1)" 로 만들고 크롭 x0=0 (빈 종이 패치 방지).
-      추론 캔버스(짧은 줄 + 오른쪽 여백)를 학습 분포에 넣는다. 0 이면 rng 소비까지 기존과 동일."""
+      추론 캔버스(짧은 줄 + 오른쪽 여백)를 학습 분포에 넣는다. 0 이면 rng 소비까지 기존과 동일.
+    ★ hw_aug: 페이지를 이 확률로 손글씨 증강(render_page hw). 0 이면 rng 소비까지 기존과 동일."""
 
     def __init__(self, P: int = 512, page_w: int = 1024, mode: str = "rand", length: int = 100_000,
                  seed: int = 42, fonts_dir=None, sampler_cfg=None, paths=None, exclude_fonts=None,
-                 aug: bool = True, std_font=STD_FONT, ragged: float = 0.0):
+                 aug: bool = True, std_font=STD_FONT, ragged: float = 0.0, hw_aug: float = 0.0):
         assert mode in ("rand", "top", "line"), mode
         self.P, self.page_w, self.mode, self.length = P, max(page_w, P), mode, length
-        self.seed, self.aug, self.std_font, self.ragged = seed, aug, std_font, ragged
+        self.seed, self.aug, self.std_font, self.ragged, self.hw_aug = seed, aug, std_font, ragged, hw_aug
         fonts_dir = Path(fonts_dir or DEFAULT_FONTS_DIR)
         exc = EXCLUDE_FONTS if exclude_fonts is None else exclude_fonts
         split.ensure_font_charsets(fonts_dir)
@@ -386,7 +436,8 @@ class KoreanPageDataset(torch.utils.data.Dataset):
                         break
                 if len(lines) < n_lines:
                     raise RuntimeError(f"{n_lines}줄 못 채움 (커버 어절 부족)")
-                pg = render_page(fp, lines, self.std_font, self.page_w, line_h, rng, self.aug,
+                hw = self.hw_aug > 0 and rng.random() < self.hw_aug               # 0 이면 rng 를 안 건드린다
+                pg = render_page(fp, lines, self.std_font, self.page_w, line_h, rng, self.aug, hw=hw,
                                  pitch=pitch)
                 if len(pg["chars"]) == 0:
                     raise RuntimeError("빈 페이지")

@@ -48,6 +48,8 @@ data:
   aug: true                          # 줄 회전·elastic·morph·blur·잉크농도·jitter
   xc_drop: 0.0                       # Xc 전체를 빈 이미지로 비우기 확률 → 추론 cfg 의 무조건부. Eruku text_dropout 대응
   ref_xc_drop: 0.0                   # 보이는 영역 Xc(ref 전사) 비우기 확률 → 전사 없는 추론(--style-text none). docs/TODO.md
+  target_xc_drop: 0.0                # 목표 영역(mask=1) Xc 만 비우기 확률 → 추론 cfg 의 uncond=gen(ref 대응표 유지)
+  hw_aug: 0.0                        # 손글씨 증강 페이지 비율(글자별 흔들기·획 굵기·흐린 잉크). page.render_page hw
   ragged: 0.0                        # 짧은 줄+오른쪽 여백 페이지 비율(크롭 x0=0). docs/inkspire.md §9.5
   sampler:
     weights:

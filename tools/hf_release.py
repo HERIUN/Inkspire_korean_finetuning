@@ -56,7 +56,8 @@ tags: [lora, handwriting, handwriting-generation, korean, inkspire, flux]
 ## 입력 규약
 
 캔버스 X(위 = ref 손글씨, 아래 = 빈 칸) · 콘텐츠 이미지 Xc(NanumGothic 으로 ref 전사와 목표 문구를 글자 상자에 그린 것) · 마스크.
-Xc 를 글자별 대응표로 쓰므로 **ref 전사(style text)는 필수**다 — 비우면 붕괴한다(CER 0.72, 절반 백지).
+Xc 의 ref 줄(전사를 표준폰트로 그린 글자 대응표)로 ref 필체를 베끼므로 **필체를 따라 하려면 ref 전사(style text)가 필요하다**.
+전사 없이도 생성은 되고 글자는 오히려 정확하지만(실손글씨 CER 0.168 → 0.033, cfg 2.0) 필체가 거의 사라진다(HWD 1.46 → 2.05).
 목표 줄 폭은 ref 의 "손글씨 폭 / 표준폰트 폭" 비율로 맞춘다(`ref_width`, 기본).
 
 ## 성능 (ref 전사를 줄 때, PP-OCRv6 판독 CER)
@@ -97,7 +98,7 @@ ref = np.asarray(Image.open("style_line.png").convert("L"))   # 손글씨 한 �
 out = g.gen_lines(ref, "스타일 이미지의 전사", ["생성할 문장"], seed=0)[0]   # u8 줄 이미지
 ```
 
-- 전사는 글자 그대로 정확히 — Xc 대응표의 원천이다(비우면 붕괴).
+- 전사는 글자 그대로 정확히 — Xc 대응표의 원천이다. 비우면(`""`) 글자는 정확하지만 필체가 사라진다.
 - 틀린 글자가 보이면 seed 만 바꿔 다시 — 오류가 시드마다 다른 글자에서 난다.
 - 흐린 연필 ref 는 출력도 흐리다(잉크 농도를 베낀다). 진하게 원하면 ref 대비를 올려 넣는다.
 
@@ -137,7 +138,7 @@ models:
 | Eruku Korean (자기회귀, T5 + 한글 적응 VAE) | [HERIUN/eruku_korean](https://huggingface.co/HERIUN/eruku_korean) | https://github.com/HERIUN/Eruku_korean_finetuning |
 | InkSpire Korean (확산, FLUX.3-Image-Klein-Base + LoRA) | [{MODEL_REPO}](https://huggingface.co/{MODEL_REPO}) | https://github.com/HERIUN/Inkspire_korean_finetuning |
 
-실제 사람 손글씨 문장의 글자 정확도는 Eruku, 필체 형태(HWD)·지저분한 스캔 ref·폰트 조건 정확도는 InkSpire(내용 CFG 2.0) 쪽이 낫다. InkSpire 는 스타일 전사가 필수다.
+실제 사람 손글씨 문장의 글자 정확도는 Eruku, 필체 형태(HWD)·지저분한 스캔 ref·폰트 조건 정확도는 InkSpire(내용 CFG 2.0) 쪽이 낫다. InkSpire 는 스타일 전사가 있어야 필체를 따라 한다(없으면 정형 글씨).
 
 라이선스: Eruku 는 Apache-2.0. InkSpire 의 베이스 {BASE} 는 FLUX Kommunity License(비상업)이며
 그 약관을 수락한 계정 토큰(secret `HF_TOKEN`)으로 실행 때 받는다. 생성 이미지는 AI 로 만든 것이다.
@@ -248,9 +249,9 @@ def generate(model_name, style_image, style_text, gen_text, cfg_scale, ink_cfg, 
         style_image = Image.fromarray(style_image)
     try:
         if model_name == "InkSpire":
+            outs = run_inkspire(style_image, style_text or "", lines, ink_cfg, steps, seed, bbox_crop)
             if not (style_text or "").strip():
-                return None, "❌ InkSpire 는 스타일 전사가 필수입니다(없으면 붕괴)"
-            outs = run_inkspire(style_image, style_text, lines, ink_cfg, steps, seed, bbox_crop)
+                return Image.fromarray(vstack(outs)), f"⚠️ InkSpire · {len(outs)}줄 생성 — 스타일 전사가 없어 필체가 거의 반영되지 않았습니다(글자는 정확). 전사를 넣으면 필체를 따라 합니다"
         else:
             outs = run_eruku(style_image, style_text, lines, cfg_scale, bbox_crop)
         return Image.fromarray(vstack(outs)), f"✅ {model_name} · {len(outs)}줄 생성"
@@ -291,9 +292,9 @@ with gr.Blocks(css=custom_css, title="Eruku · InkSpire Korean — 한글 손글
     with gr.Row():
         with gr.Column(scale=1):
             model_radio = gr.Radio(["Eruku", "InkSpire"], value="Eruku", label="🧠 모델",
-                                   info="Eruku = 글자 정확도↑ · 전사 없어도 동작 / InkSpire = 필체 형태(HWD)↑ · 전사 필수")
+                                   info="Eruku = 글자 정확도↑ · 전사 없어도 동작 / InkSpire = 필체 형태(HWD)↑ · 필체를 따르려면 전사 필요")
             style_image_input = gr.Image(label="📷 스타일 이미지 (손글씨 참조, 한 줄)", type="pil", height=200)
-            style_text_input = gr.Textbox(label="📝 스타일 전사 (Eruku 선택 · InkSpire 필수)",
+            style_text_input = gr.Textbox(label="📝 스타일 전사 (선택 — InkSpire 는 넣어야 필체를 따라 함)",
                                           placeholder="스타일 이미지에 적힌 글자 그대로", lines=2)
             gen_text_input = gr.Textbox(label="✍️ 생성할 텍스트 (줄마다 한 줄씩, 최대 8줄)", lines=3,
                                         value="한국어 손글씨 생성 테스트")
@@ -325,7 +326,7 @@ with gr.Blocks(css=custom_css, title="Eruku · InkSpire Korean — 한글 손글
 ---
 ### 📖 사용법
 1. **모델 선택** → **스타일 이미지 업로드**(따라 할 손글씨 **한 줄**, 크기는 알아서 맞춥니다)
-2. **스타일 전사** — Eruku 는 선택(넣으면 정확도↑), **InkSpire 는 필수**(글자 위치 대응표를 전사로 만듭니다)
+2. **스타일 전사** — Eruku 는 선택(넣으면 정확도↑). **InkSpire 는 넣어야 필체를 따라 합니다**(전사로 글자 대응표를 만듭니다) — 비우면 글자는 정확하지만 정형 글씨가 됩니다
 3. **생성할 텍스트** → 생성. 예제 앞 3개는 실제 사람 손글씨 스캔, 나머지는 폰트 렌더입니다.
 
 ### 📊 비교 (ref 전사를 줄 때, PP-OCRv6 CER↓ / HWD↓, InkSpire = CFG 2.0)

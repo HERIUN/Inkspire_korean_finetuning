@@ -81,6 +81,10 @@ def make_parser():
                    help="이 확률로 Xc 전체를 빈 이미지로 = 무조건부 → 추론 cfg 의 v_u. Eruku text_dropout(텍스트 전체 drop) 대응")
     p.add_argument("--ref-xc-drop", type=float, default=0.0,
                    help="이 확률로 샘플의 보이는 영역(마스크 밖) Xc 를 비운다 = ref 전사(T_s) 없는 학습 → --style-text none 추론. Eruku style_text_dropout 대응")
+    p.add_argument("--target-xc-drop", type=float, default=0.0,
+                   help="이 확률로 생성 영역(목표 줄) Xc 만 비운다 — ref 대응표 유지 = 추론 cfg 의 uncond=gen. 전체를 비우는 --xc-drop 보다 HWD 손실이 적었다")
+    p.add_argument("--hw-aug", type=float, default=0.0,
+                   help="손글씨 증강 페이지 비율(글자별 크기·기준선·자간, 획 굵기, 흐린 잉크). 학습셋만")
     p.add_argument("--ragged", type=float, default=0.0, help="짧은 줄+오른쪽 여백 페이지 비율(학습셋만, val 은 기존 그대로)")
     p.add_argument("--val-every", type=int, default=500, help="0=off")
     p.add_argument("--val-batches", type=int, default=2)
@@ -113,7 +117,8 @@ def main():
     kw = dict(P=args.P, page_w=args.page_w, sampler_cfg=args.sampler, paths=data_paths_of(args),
               exclude_fonts=args.exclude_fonts, aug=args.aug, std_font=args.std_font)
     ds = KoreanPageDataset(mode=args.mask_mode, length=(args.max_steps - start_step) * args.batch_size * args.grad_accum,
-                           seed=args.seed + start_step, fonts_dir=args.korean_fonts_dir, ragged=args.ragged, **kw)
+                           seed=args.seed + start_step, fonts_dir=args.korean_fonts_dir, ragged=args.ragged,
+                           hw_aug=args.hw_aug, **kw)
     loader = DataLoader(ds, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers,
                         drop_last=True, pin_memory=True, persistent_workers=args.num_workers > 0)
     print(f"train fonts {len(ds.fonts)}  P={args.P} mask={args.mask_mode}")
@@ -193,8 +198,9 @@ def main():
         if step >= args.max_steps:
             break
         x, xc, m = to_dev(b)
-        # 두 dropout 은 샘플마다 독립(Eruku 와 같은 짝): 보이는 영역 Xc(ref 전사, style_text_dropout) / Xc 전체(text_dropout)
-        for p_drop, region in ((args.ref_xc_drop, m == 0), (args.xc_drop, torch.ones_like(m, dtype=torch.bool))):
+        # 세 dropout 은 샘플마다 독립: 보이는 영역 Xc(ref 전사, Eruku style_text_dropout) / 목표 영역 Xc / Xc 전체(Eruku text_dropout)
+        for p_drop, region in ((args.ref_xc_drop, m == 0), (args.target_xc_drop, m == 1),
+                               (args.xc_drop, torch.ones_like(m, dtype=torch.bool))):
             if p_drop > 0:
                 drop = (torch.rand(x.shape[0], 1, 1, 1, device=device) < p_drop) & region
                 xc = torch.where(drop, torch.ones_like(xc), xc)

@@ -5,6 +5,7 @@
 ### ref 전사(T_s) dropout 학습 — 다음 후보, 미착수
 
 - **왜:** InkSpire 는 ref 전사가 필수다 — Xc 의 ref 줄(고딕으로 쓴 ref 전사)을 비우면 붕괴(CER 0.720, 300장 중 134장 백지, docs/inkspire.md §9.6).
+  ★ 2026-11-02: 이건 FLUX.1 측정이었다. Klein p512 는 전사 없이도 CER 0.0215 — 필체만 약해진다. hwaug(ref-xc-drop 0.1 포함)로 해봤지만 이득 없음(EXPERIMENTS §14).
   Eruku 는 `style_text_dropout=0.10` 으로 전사 없이도 동작한다.
 - **무엇:** 학습 때 확률 p 로 **보이는 영역(마스크 밖)의 Xc** 를 흰색으로 비운다 → "전사 모르는 ref 의 필체로 목표 글자를".
 - **평가:** `cer_dump.py --style-text none` CER 이 0.720 에서 얼마나 회복되나 + 전사 있을 때 0.023 유지되나.
@@ -27,9 +28,11 @@
 2026-10-28: 최종 LoRA(dropout 없음) + `cfg=2.0` 이 실손글씨 hw_line CER 0.25 → 0.075, HWD 1.35 → 1.58(EXPERIMENTS §10 내용 CFG).
 - 폰트 렌더 §5 n=300 (`cer_dump.py` + `inkspire:<lora>,cfg=…`)과 seosik_hw 에서 CER·HWD.
 - cfg 1.5 / 2.0 / 2.5 / 3.0 스윕 — CER·HWD 절충점. 괜찮으면 `cfg` 기본값·HF Space 반영.
-- **재학습 대기 중(2026-10-28):** `finetune_runs/inkspire_klein_refxc_xc` — `--ref-xc-drop 0.1 --xc-drop 0.05`(위 "2차" 를 1차 없이 바로, Eruku 짝),
-  p512 와 같은 레시피 13k, 처음부터. 기존 xcdrop 은 생성 영역만 비운 옛 규약이라 v_u(Xc 전체 빈 이미지)와 안 맞았다.
-  `waiter.sh` 가 다른 프로세스 없는 GPU(2 우선)를 잡으면 시작. 평가: hw_line 교차 cfg 1.5/2.0 × 시드 3(기존 두 LoRA 와 CER·HWD) + `--style-text none` CER(0.720 에서 회복?).
+- **재학습 대기 중(2026-10-30):** `finetune_runs/inkspire_klein_hwaug` — p512 레시피(13k, 처음부터) +
+  `--hw-aug 0.5 --ragged 0.5`(ragged = 짧은 줄+오른쪽 여백 페이지, inkspire.md §9.5 — 추론 캔버스 모사) + (손글씨 증강: 글자별 크기·기준선·자간, 획 굵기, 흐린 잉크 — `page.render_page(hw=)`, Xc 상자도 같이 옮김)
+  + `--ref-xc-drop 0.1`(ref 전사 의존성) + `--target-xc-drop 0.1`(추론 `uncond=gen` 과 같은 규약).
+  `waiter.sh` 가 빈 GPU(2 우선)를 잡으면 시작. 평가: 실손글씨 교차 338장·폰트 300장 cfg 1/2 CER·HWD(기존 p512 와),
+  `--style-text none` CER(0.720 에서 회복?). 두 dropout 과 증강을 한 번에 바꿔 각 효과는 분리 안 된다.
 
 ### (보관) 목표 Xc dropout — 용도 불일치로 미평가 → 2026-10-28 평가함(위)
 

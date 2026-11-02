@@ -10,7 +10,8 @@ IAM 에선 InkSpire 가 FID 7.92 / HWD 0.62 / ΔCER 0.01 로 Eruku(16.40 / 1.70 
 한글 재현의 Eruku 비교는 EXPERIMENTS §4(자체 HTR)·§5(PP-OCRv6).
 ★ 2026-10-20: 그 자체 HTR 리더가 InkSpire 출력을 과하게 나쁘게 읽었다 — 독립 리더(PP-OCRv6) 재측정은 §9.6. **판정은 §9.6 을 따른다.**
 ★ 2026-10-21: **최종 결론 §10 — 한 줄 생성은 Eruku 를 주력으로, InkSpire 는 현 상태로 보류.**
-★ **Eruku 와 다른 점 — 특히 추론 때 ref 전사(style_text)가 필수라는 점은 §11.**
+★ **Eruku 와 다른 점은 §11.** 단 §9.6·§11 의 "ref 전사 필수(없으면 붕괴 0.720)" 는 **FLUX.1-Fill-dev 백본** 측정이다 —
+  배포 백본 FLUX.3-Image-Klein-Base 는 전사 없이도 글자는 정확하고 필체만 사라진다(EXPERIMENTS §14).
 
 ---
 
@@ -547,7 +548,7 @@ held-out 16폰트 · pangram ref · n=300 · PP-OCRv6 corpus CER 기준.
 | 한글 CER (PP-OCRv6, held-out 16폰트, 전사 있음) | **0.018** | 0.040 (EXPERIMENTS §5) |
 | 논문 IAM Lines (HWD↓) | 1.70 (zero-shot) | **0.62** (IAM 학습, 조건 다름 — EXPERIMENTS §6) |
 
-### 11.2 추론 때 ref 전사가 필수인 이유
+### 11.2 추론 때 ref 전사가 필수인 이유 (FLUX.1-Fill-dev 기준 — Klein 은 필체만 약해진다, EXPERIMENTS §14)
 
 InkSpire 는 ref 줄의 **전사를 두 군데에서 쓴다.** 둘 다 대체 경로가 없다.
 
