@@ -148,11 +148,11 @@ def _shift(u, shift=SHIFT):
     return shift * u / (1 + (shift - 1) * u)
 
 
-def cfm_loss(transformer, inp, cache, guidance=None):
-    """마스크 토큰만의 v-prediction MSE. σ = shift(U(0,1))."""
+def cfm_loss(transformer, inp, cache, guidance=None, shift=SHIFT):
+    """마스크 토큰만의 v-prediction MSE. σ = shift(U(0,1)). shift 를 낮추면 학습 σ 가 중간·낮은 노이즈 쪽으로 퍼진다(EXPERIMENTS §24) — 추론 schedule 은 SHIFT 그대로."""
     x0, m = inp["x0_packed"], inp["loss_mask"].float()
     B = x0.shape[0]
-    sigma = _shift(torch.rand(B, device=x0.device))
+    sigma = _shift(torch.rand(B, device=x0.device), shift)
     z = torch.randn_like(x0)
     s = sigma.view(B, 1, 1)
     v = _pred(transformer, (1 - s) * x0 + s * z, inp, sigma, cache).float()

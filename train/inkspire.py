@@ -83,6 +83,12 @@ def make_parser():
                    help="이 확률로 샘플의 보이는 영역(마스크 밖) Xc 를 비운다 = ref 전사(T_s) 없는 학습 → --style-text none 추론. Eruku style_text_dropout 대응")
     p.add_argument("--target-xc-drop", type=float, default=0.0,
                    help="이 확률로 생성 영역(목표 줄) Xc 만 비운다 — ref 대응표 유지 = 추론 cfg 의 uncond=gen. 전체를 비우는 --xc-drop 보다 HWD 손실이 적었다")
+    p.add_argument("--boost-fonts-dir", default=None, help="풀 밖 폰트 디렉토리 — --boost-p 비율의 페이지를 이 폰트로")
+    p.add_argument("--boost-p", type=float, default=0.0)
+    p.add_argument("--xc-font-rand", type=float, default=0.0,
+                   help="Xc 를 표준폰트 대신 스타일 풀의 무작위 폰트로 그릴 페이지 비율(page.KoreanPageDataset)")
+    p.add_argument("--train-shift", type=float, default=None,
+                   help="학습 σ 추출의 shift(klein 전용, 기본 = 백본 SHIFT 6.93). val loss 는 항상 기본 shift 로 잰다 — run 간 비교용")
     p.add_argument("--hw-aug", type=float, default=0.0,
                    help="손글씨 증강 페이지 비율(글자별 크기·기준선·자간, 획 굵기, 흐린 잉크). 학습셋만")
     p.add_argument("--ragged", type=float, default=0.0, help="짧은 줄+오른쪽 여백 페이지 비율(학습셋만, val 은 기존 그대로)")
@@ -118,7 +124,8 @@ def main():
               exclude_fonts=args.exclude_fonts, aug=args.aug, std_font=args.std_font)
     ds = KoreanPageDataset(mode=args.mask_mode, length=(args.max_steps - start_step) * args.batch_size * args.grad_accum,
                            seed=args.seed + start_step, fonts_dir=args.korean_fonts_dir, ragged=args.ragged,
-                           hw_aug=args.hw_aug, **kw)
+                           hw_aug=args.hw_aug, xc_font_rand=args.xc_font_rand,
+                           boost_fonts_dir=args.boost_fonts_dir, boost_p=args.boost_p, **kw)
     loader = DataLoader(ds, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers,
                         drop_last=True, pin_memory=True, persistent_workers=args.num_workers > 0)
     print(f"train fonts {len(ds.fonts)}  P={args.P} mask={args.mask_mode}")
@@ -162,10 +169,10 @@ def main():
     def run_val(step):
         tr.eval()
         losses, rows = [], []
-        for b in val:
+        for bi, b in enumerate(val):
             x, xc, m = to_dev(b)
             with torch.random.fork_rng(devices=[device] if device.type == "cuda" else []):
-                torch.manual_seed(args.val_seed)      # ★ VAE latent_dist.sample() 도 이 안에 — 밖이면 val loss 에 잡음이 섞인다
+                torch.manual_seed(args.val_seed + bi)  # 배치마다 다른 σ·노이즈(같은 시드면 σ 가 4개뿐). ★ VAE latent_dist.sample() 도 이 안에 — 밖이면 val loss 에 잡음이 섞인다
                 inp = build_inputs(x, xc, m, vae, args.rape, args.ape)
                 losses.append(cfm_loss(tr, inp, cache, args.guidance).item())
             if len(rows) < 4:
@@ -207,7 +214,7 @@ def main():
         inp = build_inputs(x, xc, m, vae, args.rape, args.ape)          # no_grad(VAE 동결)
         # ★ bf16 autocast = accelerate mixed_precision 과 동일(dreambooth-flux). LoRA 파라미터/grad 는 fp32 유지.
         with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=device.type == "cuda"):
-            loss = cfm_loss(tr, inp, cache, args.guidance)
+            loss = cfm_loss(tr, inp, cache, args.guidance, **({"shift": args.train_shift} if args.train_shift else {}))
         (loss / args.grad_accum).backward()
         run_loss += loss.item(); run_n += 1; micro += 1
         if micro % args.grad_accum:

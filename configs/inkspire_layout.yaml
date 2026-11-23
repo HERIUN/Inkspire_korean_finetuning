@@ -40,7 +40,9 @@ paths:
 data:
   P: 512                             # 페이지 줄 수 = ceil(P/pitch)+U(0,3) — 이미지 모델과 같은 페이지 분포
   page_w: 1024
-  exclude_fonts: [UlsanJunggu, NanumGothic]   # NanumGothic = 표준폰트(Xc) family
+  exclude_fonts: [UlsanJunggu, NanumGothic,   # NanumGothic = 표준폰트(Xc) family
+                  # 글자가 틀리거나(풀어쓰기) 외곽선·훼손 장식이라 읽을 수 없는 폰트 — 판독성 감사, EXPERIMENTS §23
+                  IdeaHwegwan, UhBeekairumischief, TTSamlipCreamyWhiteR, MoiraiOne, Hungeul, KERISKEDU_Line, BMEuljirooraeorae, HakgyoansimPuzzleTTF-Outline, WagleWagle]
   sampler:                           # base.yaml 과 동일 (어절 공급 규칙)
     weights:
       ko: 0.45

@@ -386,11 +386,17 @@ class KoreanPageDataset(torch.utils.data.Dataset):
     ★ 페이지는 n_lines = ceil(P/pitch)+U(0,3), page_w = max(page_w, P) 라 항상 P×P 크롭이 가능하다.
     ★ ragged: 페이지를 이 확률로 "줄마다 폭 U(0.15,1)" 로 만들고 크롭 x0=0 (빈 종이 패치 방지).
       추론 캔버스(짧은 줄 + 오른쪽 여백)를 학습 분포에 넣는다. 0 이면 rng 소비까지 기존과 동일.
-    ★ hw_aug: 페이지를 이 확률로 손글씨 증강(render_page hw). 0 이면 rng 소비까지 기존과 동일."""
+    ★ hw_aug: 페이지를 이 확률로 손글씨 증강(render_page hw). 0 이면 rng 소비까지 기존과 동일.
+    ★ xc_font_rand: 페이지를 이 확률로 Xc 를 표준폰트 대신 **스타일 풀의 다른 무작위 폰트**(페이지 글자를 다 가진 것)로 그린다 —
+      "Xc 는 글자 정체만, 모양은 ref 에서" 를 강제(EXPERIMENTS §19). 0 이면 rng 소비까지 기존과 동일.
+    ★ boost_fonts_dir / boost_p: 페이지를 boost_p 확률로 이 디렉토리의 폰트(풀 밖, 예: AI 손글씨 폰트)로 그린다.
+      풀에 그냥 넣으면 몇 종은 0.0x% 라 비중을 따로 준다. 0 이면 rng 소비까지 기존과 동일."""
 
     def __init__(self, P: int = 512, page_w: int = 1024, mode: str = "rand", length: int = 100_000,
                  seed: int = 42, fonts_dir=None, sampler_cfg=None, paths=None, exclude_fonts=None,
-                 aug: bool = True, std_font=STD_FONT, ragged: float = 0.0, hw_aug: float = 0.0):
+                 aug: bool = True, std_font=STD_FONT, ragged: float = 0.0, hw_aug: float = 0.0,
+                 xc_font_rand: float = 0.0, boost_fonts_dir=None, boost_p: float = 0.0):
+        self.xc_font_rand = xc_font_rand
         assert mode in ("rand", "top", "line"), mode
         self.P, self.page_w, self.mode, self.length = P, max(page_w, P), mode, length
         self.seed, self.aug, self.std_font, self.ragged, self.hw_aug = seed, aug, std_font, ragged, hw_aug
@@ -401,6 +407,13 @@ class KoreanPageDataset(torch.utils.data.Dataset):
         assert self.fonts, f"폰트 없음: {fonts_dir}"
         # 폰트별 charset(두부 방지 2차 필터). 125MB json 이지만 로드 0.6s — 1회만.
         self.charsets = json.load(open(fonts_dir / "fonts_charsets.json"))
+        self.boost, self.boost_p = [], boost_p
+        if boost_fonts_dir and boost_p > 0:
+            self.boost = split.font_files(boost_fonts_dir)
+            assert self.boost, f"boost 폰트 없음: {boost_fonts_dir}"
+            for b in self.boost:
+                assert b.name not in self.charsets, f"boost 폰트 이름이 풀과 겹침: {b.name}"
+                self.charsets[b.name] = "".join(chr(c) for c in split.G.get_cmap(b))
         _, self.gen = split.build_samplers((1, 8), (1, 32), seed=seed, sampler_cfg=sampler_cfg,
                                            paths=paths, fonts_dir=fonts_dir, exclude_fonts=exc)
 
@@ -414,6 +427,8 @@ class KoreanPageDataset(torch.utils.data.Dataset):
         for _ in range(5):
             wi = rng.randrange(len(self.fonts))
             fp = self.fonts[wi]
+            if self.boost and rng.random() < self.boost_p:                       # 꺼져 있으면 rng 를 안 건드린다
+                bi = rng.randrange(len(self.boost)); fp, wi = self.boost[bi], len(self.fonts) + bi
             try:
                 line_h = rng.uniform(40, 80)
                 pitch = int(round(line_h * rng.uniform(1.05, 1.35)))
@@ -437,7 +452,15 @@ class KoreanPageDataset(torch.utils.data.Dataset):
                 if len(lines) < n_lines:
                     raise RuntimeError(f"{n_lines}줄 못 채움 (커버 어절 부족)")
                 hw = self.hw_aug > 0 and rng.random() < self.hw_aug               # 0 이면 rng 를 안 건드린다
-                pg = render_page(fp, lines, self.std_font, self.page_w, line_h, rng, self.aug, hw=hw,
+                std = self.std_font
+                if self.xc_font_rand > 0 and rng.random() < self.xc_font_rand:   # 0 이면 rng 를 안 건드린다
+                    need = set("".join(lines)) - {" "}
+                    for _ in range(8):   # 못 찾으면 표준폰트 그대로
+                        c = self.fonts[rng.randrange(len(self.fonts))]
+                        if c != fp and need <= set(self.charsets.get(c.name, "")):
+                            std = c
+                            break
+                pg = render_page(fp, lines, std, self.page_w, line_h, rng, self.aug, hw=hw,
                                  pitch=pitch)
                 if len(pg["chars"]) == 0:
                     raise RuntimeError("빈 페이지")
@@ -565,6 +588,15 @@ def _selfcheck(out: Path, n: int):
         assert pg["ragged"] and max(ends) - min(ends) >= pg["page_w"] / 4, ends
         assert (rg[i]["x"][0, :, :64] < 0).any(), "ragged 패치 좌측 64px 에 잉크 없음(x0=0 크롭 아님)"
     print(f"ragged ×{n} ok")
+    # xc_font_rand=1: Xc 가 표준폰트 렌더와 달라지고(다른 폰트), 상자는 X 와 그대로 공유
+    xr = KoreanPageDataset(P=P, mode="rand", length=1000, seed=7, xc_font_rand=1.0)
+    diff = 0
+    for i in range(n):
+        pg, _, _ = xr._page(i)
+        diff += not np.array_equal(pg["xc"], render_content(pg["chars"], pg["bboxes"], STD_FONT, *pg["xc"].shape))
+        Image.fromarray(np.vstack([pg["x"], pg["xc"]])).save(out / f"xcfont_{i}.png")
+    assert diff >= n - 1, diff
+    print(f"xc_font_rand ×{n} ok")
     print(f"__getitem__ {np.mean(times) * 1000:.0f} ms avg / {np.max(times) * 1000:.0f} ms max ({len(times)} calls)")
     print(f"self-check OK → {out}")
 
