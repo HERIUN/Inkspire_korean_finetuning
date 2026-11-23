@@ -70,6 +70,54 @@ def load_flux_or_exit(device="cuda", cache=None, M=None, **kw):
     return tr, vae, torch.load(cache)
 
 
+def _word_gaps(arr, n, th=200):
+    """잉크 열 투영에서 가장 넓은 빈 열 구간 n 개의 평균 폭(px) — 어절 간격 추정. 첫·끝 잉크 밖은 안 센다."""
+    cols = (np.asarray(arr) < th).any(0)
+    idx = np.where(cols)[0]
+    if n <= 0 or len(idx) < 2:
+        return None
+    runs, cur = [], 0
+    for c in cols[idx[0]:idx[-1] + 1]:
+        if c:
+            if cur: runs.append(cur)
+            cur = 0
+        else:
+            cur += 1
+    return float(np.mean(sorted(runs)[-n:])) if len(runs) >= n else None
+
+
+def _fit_words(bx, ch, img, ink_h, th=200):
+    """진단용 오라클: 목표 줄의 **실제 이미지**에서 어절 x 구간을 뽑아(가장 넓은 빈 열 구간 = 공백 수만큼) 표준폰트 상자를 어절 단위로 거기에 맞춘다.
+    어절 안 글자 배분은 표준폰트 비율 그대로. 이미지는 잉크 높이 → ink_h 로 환산(ref 와 같은 규칙). 어절 수가 안 맞으면 None."""
+    ib = _ink_box(img)
+    if ib is None:
+        return None
+    im = img[ib[1]:ib[3], ib[0]:ib[2]]
+    s, cols = ink_h / im.shape[0], (im < th).any(0)
+    runs, st = [], None
+    for x, c in enumerate(cols):   # 빈 열 구간 (시작, 길이) — 첫·끝 잉크 사이만
+        if not c and st is None: st = x
+        if c and st is not None: runs.append((st, x - st)); st = None
+    n = sum(c == " " for c in ch)
+    words = [[]]
+    for i, c in enumerate(ch):
+        if c == " ": words.append([])
+        else: words[-1].append(i)
+    if len(runs) < n or any(not w for w in words):
+        return None
+    cuts = sorted(sorted(runs, key=lambda r: -r[1])[:n])
+    xs = [0] + [v for a, l in cuts for v in (a, a + l)] + [im.shape[1]]
+    out = bx.copy()
+    for k, w in enumerate(words):
+        a0, a1, d0, d1 = bx[w[0], 0], bx[w[-1], 2], LEFT + xs[2 * k] * s, LEFT + xs[2 * k + 1] * s
+        out[w, 0] = d0 + (bx[w, 0] - a0) * (d1 - d0) / max(1.0, a1 - a0)
+        out[w, 2] = d0 + (bx[w, 2] - a0) * (d1 - d0) / max(1.0, a1 - a0)
+    for i, c in enumerate(ch):   # 공백 상자 = 양옆 어절 사이
+        if c == " ":
+            out[i, 0], out[i, 2] = out[i - 1, 2], out[i + 1, 0]
+    return out
+
+
 def _ink_box(arr, th=250):
     ys, xs = np.where(arr < th)
     return None if len(ys) == 0 else (int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1)
@@ -77,7 +125,7 @@ def _ink_box(arr, th=250):
 
 class InkSpireGen:
     def __init__(self, lora_dir=None, layout_ckpt=None, device="cuda", steps=20, guidance=30.0,
-                 rape=True, ape=True, std_font=STD_FONT, trim_ref=True, degrade=0.0, tight_mask=False, ref_width=True, line_h=LINE_H, cfg=1.0, uncond="all", cfg_s=None):
+                 rape=True, ape=True, std_font=STD_FONT, trim_ref=True, degrade=0.0, tight_mask=False, ref_width=True, line_h=LINE_H, cfg=1.0, uncond="all", cfg_s=None, word_gap=False, cfg_t=(0.0, 1.0)):
         """lora_dir=None 이면 FLUX 를 안 올린다(prepare/--dry-run 전용). layout_ckpt=None → std layout.
         tight_mask: 마스크 = [ref 잉크 바닥 ↑16격자, 목표 상자 바닥+4 ↑16격자) — 캔버스도 거기서 끝난다.
           기본(False)은 y_cut = clip(목표 top−2, ref 바닥+1, TOP+PITCH), H = max(TOP+PITCH·(n+1), 상자 바닥+8).
@@ -86,7 +134,10 @@ class InkSpireGen:
         self.device, self.steps, self.guidance, self.rape, self.ape = device, steps, guidance, rape, ape
         self.cfg = cfg   # CFG(FLUX.3-Image-Klein-Base). 1.0 = 끔. 학습 안 한 v_u 로도 듣는다(EXPERIMENTS §10 내용 CFG)
         self.uncond = uncond   # v_u 의 Xc: all = 전체 빈 이미지, gen = 생성 영역만 비움(ref 대응표 유지)
+        self.cfg_t = cfg_t     # guidance 를 거는 step 비율 구간 [a, b) (models.inkspire_klein.generate)
         self.cfg_s = cfg_s     # 주면 분리 guidance — ref 대응표(필체) 쪽 배율(models.inkspire_klein.generate)
+        # word_gap: ref 의 어절 간격을 목표 줄 공백에 옮긴다(ref_width 는 줄 전체 폭만 맞춰 손글씨의 넓은 띄어쓰기가 좁아진다)
+        self.word_gap = word_gap
         self.trim_ref, self.degrade, self.tight_mask, self.ref_width = trim_ref, degrade, tight_mask, ref_width
         self.std_font_path = std_font          # ★ 학습(configs/inkspire.yaml data.std_font)과 같아야 한다
         # line_h: 표준폰트 '한글' 잉크 높이 기준(학습 U(40,80)). 줄 간격은 같은 비율(PITCH/LINE_H)로 늘린다
@@ -102,18 +153,20 @@ class InkSpireGen:
             self.tr, self.vae, self.cache = load_flux_or_exit(device, M=self.M, lora_ckpt=lora_dir, grad_ckpt=False)
             self.tr.eval()
 
-    def prepare(self, style_arr, style_text, lines, seed=0, ctx=()) -> dict:
+    def prepare(self, style_arr, style_text, lines, seed=0, ctx=(), tgt_imgs=None) -> dict:
         """캔버스 구성(FLUX 불필요). → {x, xc, mask u8[H,W], chars, boxes int32[N,4], line_id}.
         ctx: ref 아래에 보이는 줄로 더 깔 [(u8 줄 이미지, 전사[, 글자 x 상자 [N,2]]), …] — 목표 줄은 그만큼 아래로 밀린다.
           x 상자(이미지 좌표, 공백 포함 render_line 순서)를 주면 표준폰트 근사 대신 그 위치를 쓴다 — 진짜 필체 줄은
           글자 폭이 표준폰트와 달라 근사하면 X↔Xc 짝이 어긋난다(숫자·기호 많은 줄은 10% 가 반 글자 이상).
-          보이는 줄은 전부 line_id 0. 레이아웃 모델의 Δy 규약과 안 맞아 std layout 전용."""
+          보이는 줄은 전부 line_id 0. 레이아웃 모델의 Δy 규약과 안 맞아 std layout 전용.
+        tgt_imgs: 진단용 오라클 — 줄마다 그 목표 줄의 실제 이미지(u8). 어절 위치·폭을 거기서 가져온다(_fit_words, EXPERIMENTS §20)."""
         assert not (ctx and self.layout is not None), "ctx 는 std layout 전용"
         b = self.std_font.getbbox("한글")
         ink_h, y_ref = b[3] - b[1], TOP + b[1]                       # 표준폰트 '한글' 잉크 행
 
         vis, chars, boxes, line_id, row = [], [], [], [], []
         sx = 1.0   # 목표 줄 x 배율 (ref_width)
+        gap_add = 0.0   # word_gap: 목표 줄 공백마다 더할 px
         for r, (arr, text, *xb) in enumerate([(style_arr, style_text), *ctx]):   # 보이는 줄 r = ref(0), ctx(1..k)
             ib = _ink_box(arr)
             im = arr[ib[1]:ib[3], ib[0]:ib[2]] if ib else arr
@@ -123,7 +176,7 @@ class InkSpireGen:
             # ★ 이미지에서 글자를 직접 분할해 실제 bbox 를 주는 방식도 해봤으나 CER 0.20 → 0.61 로 폭망(2026-09-14).
             #   레이아웃 모델이 레퍼런스 토큰의 분산을 그대로 증폭한다 — 매끈한 근사값이 오히려 낫다.
             if text:
-                _, ch, bx = render_line(self.std_font, text, 4 * MAX_W, TOP + r * self.pitch, LEFT)
+                strip, ch, bx = render_line(self.std_font, text, 4 * MAX_W, TOP + r * self.pitch, LEFT)
                 if len(bx):
                     bx = bx.astype(np.float32)
                     x0, x1 = bx[:, 0].min(), bx[:, 2].max()
@@ -135,12 +188,25 @@ class InkSpireGen:
                         bx[:, [0, 2]] = LEFT + (bx[:, [0, 2]] - x0) * w / max(1.0, x1 - x0)
                         if r == 0 and self.ref_width:
                             sx = w / max(1.0, x1 - x0)
+                        if r == 0 and self.word_gap:   # 같은 n 개 최대 빈칸을 ref 손글씨 / 표준폰트(같은 폭으로 맞춘 것) 양쪽에서
+                            n = text.count(" ")
+                            g_ref = _word_gaps(vis[0], n)
+                            g_std = _word_gaps(strip[:, int(x0):int(x1)], n)
+                            if g_ref is not None and g_std is not None:
+                                gap_add = max(0.0, g_ref - g_std * w / max(1.0, x1 - x0))
                     chars += ch; boxes.append(bx); line_id += [0] * len(ch); row += [r] * len(ch)
         k = len(vis) - 1
         for i, text in enumerate(lines):   # 타깃 토큰: std layout 을 초기값/기본값으로
             _, ch, bx = render_line(self.std_font, text, 4 * MAX_W, TOP + (i + 1 + k) * self.pitch, LEFT)
             bx = bx.astype(np.float32)
             bx[:, [0, 2]] = LEFT + (bx[:, [0, 2]] - LEFT) * sx
+            if gap_add:   # 공백 토큰마다 뒤 토큰들을 gap_add 만큼 민다
+                sp = np.cumsum([c == " " for c in ch]).astype(np.float32)
+                bx[:, [0, 2]] += (sp * gap_add)[:, None]
+            if tgt_imgs is not None and tgt_imgs[i] is not None:
+                fb = _fit_words(bx, ch, tgt_imgs[i], ink_h)
+                self.oracle_miss = getattr(self, "oracle_miss", 0) + (fb is None)
+                bx = bx if fb is None else fb
             chars += ch; boxes.append(bx); line_id += [i + 1] * len(ch); row += [-1] * len(ch)
         boxes = np.concatenate(boxes, 0) if boxes else np.zeros((0, 4), np.float32)
         line_id, row = np.array(line_id, dtype=np.int64), np.array(row, dtype=np.int64)
@@ -218,17 +284,23 @@ class InkSpireGen:
         return strip
 
     @torch.no_grad()
-    def gen_lines(self, style_arr, style_text, lines, seed=0, ctx=()) -> list[np.ndarray]:
-        """style_arr u8[H,W](ink~0) 한 줄 + 그 전사 → lines 각각의 생성 이미지 u8 리스트. ctx 는 prepare 참고."""
-        assert self.tr is not None, "FLUX 미로드(lora_dir=None) — prepare/--dry-run 만 가능"
-        c = self.prepare(style_arr, style_text, lines, seed, ctx)
+    def inpaint(self, x, xc, mask, seed=0, cfg=None, t0=0) -> np.ndarray:
+        """캔버스 u8[H,W] 의 mask=1 영역을 채운 캔버스 u8. cfg 를 주면 이 호출만 그 내용 CFG 로(infer/fix.py 재인페인팅)."""
+        cfg = self.cfg if cfg is None else cfg
         dev = self.device
         t = lambda a: torch.from_numpy(a.astype(np.float32) / 127.5 - 1.0)[None, None].to(dev)
-        m = torch.from_numpy(c["mask"].astype(np.float32))[None, None].to(dev)
-        x_hat = self.M.generate(self.tr, self.vae, t(c["x"]), t(c["xc"]), m, self.cache, steps=self.steps,
-                         guidance=self.guidance, seed=seed, rape=self.rape, ape=self.ape,
-                         **({"cfg": self.cfg, "uncond": self.uncond, "cfg_s": self.cfg_s} if self.cfg != 1.0 or self.cfg_s is not None else {}))
-        out = ((x_hat[0, 0].cpu().numpy() + 1) * 127.5).clip(0, 255).astype(np.uint8)
+        m = torch.from_numpy(mask.astype(np.float32))[None, None].to(dev)
+        with torch.no_grad():
+            x_hat = self.M.generate(self.tr, self.vae, t(x), t(xc), m, self.cache, steps=self.steps,
+                         guidance=self.guidance, seed=seed, rape=self.rape, ape=self.ape, **({"t0": t0} if t0 else {}),
+                         **({"cfg": cfg, "uncond": self.uncond, "cfg_s": self.cfg_s, "cfg_t": self.cfg_t} if cfg != 1.0 or self.cfg_s is not None else {}))
+        return ((x_hat[0, 0].cpu().numpy() + 1) * 127.5).clip(0, 255).astype(np.uint8)
+
+    def gen_lines(self, style_arr, style_text, lines, seed=0, ctx=(), tgt_imgs=None) -> list[np.ndarray]:
+        """style_arr u8[H,W](ink~0) 한 줄 + 그 전사 → lines 각각의 생성 이미지 u8 리스트. ctx 는 prepare 참고."""
+        assert self.tr is not None, "FLUX 미로드(lora_dir=None) — prepare/--dry-run 만 가능"
+        c = self.prepare(style_arr, style_text, lines, seed, ctx, tgt_imgs)
+        out = self.inpaint(c["x"], c["xc"], c["mask"], seed)
         return [self._crop_line(out, c, i) for i in range(len(lines))]
 
     def gen(self, style_arr, style_text, target_text, seed=0) -> np.ndarray:

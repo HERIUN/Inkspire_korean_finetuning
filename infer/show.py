@@ -89,7 +89,7 @@ def style_tensor(arr, h=64):
 def load_model(ckpt, device, vae_checkpoint=None):
     """`inkspire:<lora_dir>[,<layout_ckpt>][,key=value…]` → (InkSpireGen, "inkspire").
 
-    key=value 로 steps · guidance · std_font · trim_ref · degrade · tight_mask · ref_width · line_h · cfg(내용 CFG) · uncond(all|gen, v_u 의 Xc) · cfg_s(분리 guidance 의 필체 쪽) 를 스윕할 수 있다.
+    key=value 로 steps · guidance · std_font · trim_ref · degrade · tight_mask · ref_width · line_h · cfg(내용 CFG) · uncond(all|gen, v_u 의 Xc) · cfg_s(분리 guidance 의 필체 쪽) · cfg_t0/cfg_t1(guidance 를 거는 step 비율 구간) 를 스윕할 수 있다.
     ref_width 기본 1 — 2026-10-22 이전 수치(EXPERIMENTS §2~§8)는 ref_width=0 으로 잰 것이다.
     """
     if not str(ckpt).startswith("inkspire:"):
@@ -109,7 +109,8 @@ def load_model(ckpt, device, vae_checkpoint=None):
                        ref_width=bool(kw.get("ref_width", 1)),
                        line_h=int(kw.get("line_h", 64)),
                        cfg=float(kw.get("cfg", 1.0)), uncond=kw.get("uncond", "all"),
-                       cfg_s=kw.get("cfg_s")), "inkspire"
+                       cfg_s=kw.get("cfg_s"), word_gap=bool(kw.get("word_gap", 0)),
+                       cfg_t=(kw.get("cfg_t0", 0.0), kw.get("cfg_t1", 1.0))), "inkspire"
 
 
 def gen_from_style(model, style_img, style_text, gen_text, cfg, max_new, device,

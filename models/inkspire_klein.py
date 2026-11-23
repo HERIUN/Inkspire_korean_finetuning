@@ -169,13 +169,16 @@ def xc_uncond(xc, mask=None, region="all"):
 
 
 @torch.no_grad()
-def generate(transformer, vae, x, xc, mask, cache, steps=20, guidance=None, seed=0, rape=None, ape=None, cfg=1.0, uncond="all", cfg_s=None):
+def generate(transformer, vae, x, xc, mask, cache, steps=20, guidance=None, seed=0, rape=None, ape=None, cfg=1.0, uncond="all", cfg_s=None, cfg_t=(0.0, 1.0), t0=0):
     """Euler ODE → x·(1−mask) + gen·mask, [B,1,H,W]∈[-1,1]. 비마스크 토큰은 매 step GT 노이즈 버전으로 고정.
     cfg ≠ 1: CFG — v = v_u + cfg·(v_c − v_u), v_u 는 xc_uncond(xc, mask, uncond) 조건(all = Xc 전체 빈 이미지, gen = 생성 영역만). 조건/무조건을 한 배치로.
       학습 안 한 v_u 로도 듣는다(EXPERIMENTS §10 내용 CFG).
     cfg_s 를 주면 두 조건 분리 guidance(InstructPix2Pix): v = v_all + cfg_s·(v_gen − v_all) + cfg·(v_c − v_gen)
       — v_gen = 생성 영역만 비운 Xc(ref 대응표 유지), v_all = Xc 전체 빈 이미지. cfg_s 가 ref 대응표(필체) 쪽, cfg 가 내용 쪽.
-      cfg_s=1 ≡ uncond="gen", cfg_s=cfg ≡ uncond="all". 3배 배치."""
+      cfg_s=1 ≡ uncond="gen", cfg_s=cfg ≡ uncond="all". 3배 배치.
+    cfg_t=(a, b): guidance 를 step 비율 [a, b) 에서만 건다(0 = 노이즈 쪽 시작). 밖의 step 은 조건 예측만(cfg 1 과 같음).
+      글자 구조는 앞쪽, 획 질감은 뒤쪽 step 에서 정해진다는 가정 — (0, 1) 은 기존과 비트 동일.
+    t0: 진단용 — step t0 에서 시작한다. 마스크 영역을 x 의 내용에 그 step 의 노이즈를 섞은 것으로 두고 나머지 step 만 돈다(0 = 기존과 동일)."""
     inp = build_inputs(x, xc, mask, vae)
     x0, keep = inp["x0_packed"], ~inp["loss_mask"][..., None]
     B = x0.shape[0]
@@ -184,12 +187,12 @@ def generate(transformer, vae, x, xc, mask, cache, steps=20, guidance=None, seed
     sig = sched.sigmas.to(x0.device)                        # [steps+1] shift 적용, 끝 0
     g = torch.Generator(device=x0.device).manual_seed(seed)
     z = torch.randn(x0.shape, generator=g, device=x0.device, dtype=torch.float32)
-    lat = z.clone()
+    lat = (1 - sig[t0]) * x0 + sig[t0] * z   # t0=0 → sig=1 → z
     us = ["gen", "all"] if cfg_s is not None else [uncond] if cfg != 1.0 else []
     if us:
         inp2 = dict(inp, cond_packed=torch.cat([inp["cond_packed"], *(build_inputs(x, xc_uncond(xc, mask, u), mask, vae)["cond_packed"] for u in us)]))
-    for i in range(steps):
-        if us:
+    for i in range(t0, steps):
+        if us and cfg_t[0] <= i / steps < cfg_t[1]:
             vs = _pred(transformer, torch.cat([lat] * (1 + len(us))), inp2, sig[i].expand((1 + len(us)) * B), cache).float().chunk(1 + len(us))
             v = vs[2] + cfg_s * (vs[1] - vs[2]) + cfg * (vs[0] - vs[1]) if cfg_s is not None else vs[1] + cfg * (vs[0] - vs[1])
         else:
@@ -268,6 +271,9 @@ def _smoke(device):
     # (5c) 분리 guidance: cfg_s=1 ≡ uncond=gen, cfg_s=cfg ≡ uncond=all (배치 크기가 달라 수치 오차만)
     assert torch.allclose(generate(tr, vae, x, xc, mask, cache, steps=2, cfg=2.0, cfg_s=1.0), out3, atol=1e-3)
     assert torch.allclose(generate(tr, vae, x, xc, mask, cache, steps=2, cfg=2.0, cfg_s=2.0), out2, atol=1e-3)
+    assert torch.equal(generate(tr, vae, x, xc, mask, cache, steps=2, cfg=2.0, cfg_t=(0.0, 0.0)), out)          # 구간 비면 cfg 1
+    o_h = generate(tr, vae, x, xc, mask, cache, steps=2, cfg=2.0, cfg_t=(0.0, 0.5))                              # 앞 step 만
+    assert not torch.equal(o_h, out) and not torch.equal(o_h, out2)
     # (6) save → load 왕복
     with tempfile.TemporaryDirectory() as d:
         save_lora(tr, d)
