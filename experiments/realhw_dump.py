@@ -19,6 +19,7 @@ montage.py 를 그대로 쓴다(plan 의 "font" 칸 = 필기자 키: hw_line 은
 """
 import argparse
 import json
+import re
 from pathlib import Path
 
 import numpy as np
@@ -120,7 +121,17 @@ def main():
     ap.add_argument("--stroke", type=int, default=0,
                     help="진단용: 크롭 뒤 ref 획을 k×k 최솟값 필터로 굵히고 잉크를 검정(0)으로 진하게 — 가늘고 연한 실제 획이 원인인지")
     ap.add_argument("--no-style-text", action="store_true", help="ref 전사를 주지 않는다(EXPERIMENTS §14)")
+    ap.add_argument("--oracle-words", action="store_true",
+                    help="진단(InkSpire 전용): 목표 줄 어절 위치·폭을 목표의 실제 이미지에서 가져온다(InkSpireGen.prepare tgt_imgs)")
     ap.add_argument("--cross", action="store_true", help="같은 필기자의 다른 표본 문구를 생성(docstring)")
+    ap.add_argument("--longest-style", type=int, default=0, metavar="N",
+                    help="Eruku echo_metrics --real-hw 프로토콜: 페이지(hw_line 은 한 명)마다 가장 긴 글이 style, 한글 2자 이상인 "
+                         "나머지가 정답(최대 N). Eruku repo custom_datasets/hf_korean_handwriting_clean 과 같이 쓴다")
+    ap.add_argument("--all-pairs", action="store_true",
+                    help="--longest-style 대신 같은 페이지(필기자) 안 모든 (ref, 목표) 순서쌍 — ref 하나에 결과가 좌우되지 않게")
+    ap.add_argument("--cross-k", type=int, default=0, metavar="K",
+                    help="페이지 무관 교차: 모든 크롭(한글 2자+)을 ref 로, 다른 크롭 K개(고정 시드)를 목표로 — CER 표본 늘리기용. "
+                         "목표가 다른 필기자라 HWD 엔 쓰지 말 것")
     ap.add_argument("--free", nargs="*", default=None, help="데이터에 없는 문구들 — --refs 와 함께")
     ap.add_argument("--refs", nargs="*", type=int, default=[], help="--free 에 쓸 ref 표본 번호(metadata 순서)")
     ap.add_argument("--grid", nargs="*", default=None, help="라벨=--free 덤프 디렉토리 … → out 을 PNG 경로로 보고 격자만 만든다")
@@ -153,31 +164,51 @@ def main():
     for idx in by_w.values():
         for k, i in enumerate(idx):
             nxt[i] = idx[(k + 1) % len(idx)]
+    pairs = [(r, rows[nxt[i]] if a.cross else r) for i, r in enumerate(rows)]   # (ref, 목표). echo 면 자기 자신
+    page = lambda r: "hw_line" if r["subset"] == "hw_line" else re.sub(r"_b\d+\.png$", "", Path(r["file_name"]).name).replace(".", "_")
+    if a.longest_style or a.all_pairs:   # Eruku echo_metrics.py --real-hw 와 같은 묶음·선택(페이지 키 = _b### 앞)
+        pages = {}
+        for r in rows:
+            if len(re.findall("[가-힣]", r["text"])) >= 2:
+                pages.setdefault(page(r), []).append(r)
+        pairs = []
+        for _, rs in sorted(pages.items()):
+            rs = sorted(rs, key=lambda r: -len(r["text"]))
+            pairs += ([(r, t) for r in rs for t in rs if t is not r] if a.all_pairs
+                      else [(rs[0], t) for t in rs[1:1 + a.longest_style]])
+    if a.cross_k:
+        import random
+        el = [r for r in rows if len(re.findall("[가-힣]", r["text"])) >= 2]
+        rng = random.Random(a.seed)
+        pairs = [(r, t) for r in el for t in rng.sample([x for x in el if x is not r], a.cross_k)]
     for sub in ("gen", "gt"):
         (out / sub).mkdir(parents=True, exist_ok=True)
     plan, tr = [], {}
-    for i, r in enumerate(rows):
+    for i, (r, t) in enumerate(pairs):
         name = f"{i:05d}.png"
         arr = load(r)
         ref = thick({"eruku": eruku_crop, "prep": prep, "raw": lambda x: x}[a.crop](arr), a.stroke)
-        t = rows[nxt[i]] if a.cross else r   # 목표 표본(echo 면 자기 자신)
-        g = gen(ref, "" if a.no_style_text else r["text"], t["text"], a.seed * 1_000_003 + i)
+        if a.oracle_words:   # gen_from_style 과 같은 ref 왕복(style_tensor) 뒤 gen_lines 를 직접 부른다
+            rr = ((style_tensor(ref)[0].numpy() + 1) * 127.5).clip(0, 255).astype(np.uint8)
+            g = model.gen_lines(rr, r["text"], [t["text"]], a.seed * 1_000_003 + i, tgt_imgs=[eruku_crop(load(t))])[0]
+        else:
+            g = gen(ref, "" if a.no_style_text else r["text"], t["text"], a.seed * 1_000_003 + i)
         Image.fromarray(g).save(out / "gen" / name)
         Image.fromarray(load(t)).save(out / "gt" / name)   # 목표 표본의 실제 이미지(전처리 전) — CER 리더 바닥·HWD real
         tr[name] = t["text"]
-        plan.append({"i": i, "text": t["text"], "ref_text": r["text"], "font": writer(r), "subset": r["subset"],
+        plan.append({"i": i, "text": t["text"], "ref_text": r["text"], "font": page(r) if a.longest_style or a.all_pairs else writer(r), "subset": r["subset"],
                      "ref_image": str(data / r["file_name"])})
         if a.crop != "raw":
             (out / "ref").mkdir(exist_ok=True); Image.fromarray(ref).save(out / "ref" / name)
             plan[-1]["ref_image"] = str(out / "ref" / name)
         if (i + 1) % 50 == 0:
-            print(f"  {i + 1}/{len(rows)}", flush=True)
+            print(f"  {i + 1}/{len(pairs)}", flush=True)
     for sub in ("gen", "gt"):
         (out / sub / "transcriptions.json").write_text(json.dumps(tr, ensure_ascii=False), encoding="utf-8")
     (out / "plan.json").write_text(json.dumps({"seed": a.seed, "style_ref_text": None, "rows": plan},
                                               ensure_ascii=False, indent=0), encoding="utf-8")
     (out / "ckpt.txt").write_text(f"{a.ckpt} cfg={a.cfg}" + f" crop={a.crop}" + (" cross" if a.cross else " echo") + "\n")
-    print(f"gen {len(tr)} → {out}")
+    print(f"gen {len(tr)} → {out}" + (f"  (오라클 어절 못 맞춘 줄 {getattr(model, 'oracle_miss', 0)})" if a.oracle_words else ""))
 
 
 if __name__ == "__main__":

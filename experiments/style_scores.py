@@ -20,6 +20,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
 HERE = Path(__file__).resolve().parents[1]
+import sys; sys.path.insert(0, str(Path(__file__).resolve().parent))   # realhw_dump
 CER = HERE / "finetune_runs/_cer"
 RUNS = [f"FLUX.3-Klein s13000={CER}/klein_s013000_test_sref",
         f"FLUX.1-Fill s13000={CER}/s13000_test_sref",
@@ -37,10 +38,14 @@ def render(fp, text, size=72, pad=14):
 
 
 def norm(im):
-    """배경 → 255, 잉크 bbox 크롭, 잉크 높이 15% 여백."""
+    """배경 → 255, 밀도 기반 크롭 + 잉크 bbox 크롭, 잉크 높이 15% 여백."""
     import numpy as np
     a = np.asarray(im.convert("L"), np.float32)
     a = np.clip(a * 255.0 / max(1.0, float(np.median(a))), 0, 255)
+    # ★ 2026-11-12: 잉크 bbox 전에 밀도 기반 크롭(realhw_dump.eruku_crop = 모델 ref 에 쓰는 것). 실손글씨 스캔은 잡티 한 점이
+    #   bbox 를 이미지 전체로 넓혀(hw_line 20줄 중 절반) 글씨가 작게 잡히고, real 쪽만 그래서 HWD 가 ~0.8 부풀었다(EXPERIMENTS §20).
+    from realhw_dump import eruku_crop
+    a = eruku_crop(a.astype(np.uint8)).astype(np.float32)
     ys, xs = np.where(a < 200)
     if len(ys):
         a = a[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
